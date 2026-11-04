@@ -96,3 +96,64 @@ Decision to make in phase 0: fork Insomnia and build on it, or start a new Swift
 ## 7. How we will know it works
 
 Each phase ships with a real-Mac checklist run on a ventilated desk with disposable work, and the result recorded with the exact build, macOS version and hardware. Unit tests use fakes and temp folders only; nothing in the test suite changes the developer's power settings, processes or Wi-Fi.
+
+## 8. Seeing the Mac screen from the phone
+
+Three levels, cheapest first. Each is a step in the phases above.
+
+1. **No code (now):** macOS Screen Sharing + Tailscale + a VNC client on the iPhone (Screens, Jump Desktop). Use it to learn what people actually need to see.
+2. **Screenshots (phase 1):** `ScreenCaptureKit` snapshot every 2–5 s, shrunk, shown in the phone web app. Near-zero CPU and battery cost.
+3. **Live mirror (phase 3):** `ScreenCaptureKit` → hardware HEVC/H.264 (`VideoToolbox`) → WebRTC → iPhone (`AVSampleBufferDisplayLayer`, Picture-in-Picture) or Safari. Target 10–15 fps at ~1280 px wide, 1–3 Mbit/s, 150–300 ms delay. Per-window capture for terminals; a text view (tmux capture or a web terminal) for agents in tmux, which is sharper and cheaper than video.
+
+Edge cases to handle, in test order:
+
+- Lid closed, panel at brightness 0: capture works; a truly sleeping display may stop drawing, so hold a display assertion or capture windows.
+- Locked screen: whole-screen capture shows the lock screen. Decide between window capture (verify it renders while locked), or "unlocked while a paired phone is connected, re-lock on disconnect".
+- Screen saver and idle dim take over the picture; disable during a session or capture windows.
+- Screen Recording permission is asked again after every rebuild (signature changes). Nothing can capture before login after a reboot.
+- NAT and IP changes (Wi-Fi → hotspot): reconnect by itself. Phone-as-hotspot is the fastest case (same network).
+- Data and battery: 0.5–1.5 GB per hour of live video on cellular; 3–8% CPU on the Mac. Stream only while the phone is looking; otherwise screenshots.
+- Readability: a 14-inch Retina screen on a phone needs zoom or a single-window view.
+- Display changes (external monitor, resolution, Low Power Mode rescale) restart the capture.
+- Security: encrypt end to end (Tailscale or WebRTC DTLS), pairing, never record to disk, re-lock on disconnect.
+- iPhone: iOS stops background video; use PiP. A native app needs a developer account for a lasting install (TestFlight).
+- Apple's own tools go the other way (iPhone Mirroring) or are Mac-to-Mac only (high-performance Screen Sharing).
+
+## 9. Distribution
+
+### Mac: direct download, notarized (not the Mac App Store)
+
+The App Store sandbox forbids what Awake needs: `sudo pmset`, SIGSTOP on other apps, reading other apps' windows, writing another app's preferences, a launchd recovery agent. So:
+
+1. **Notarized zip/dmg on GitHub Releases + Homebrew cask** (`brew install --cask awake`) + Sparkle for updates. Needs the $99/year Apple Developer ID. This is the default path.
+2. **`install.sh` / CLI installer** kept for terminal users (as Insomnia and REA do), never the only path.
+3. **Ad-hoc signed zip** (Insomnia today) only for early testers: every stranger hits a Gatekeeper block.
+4. **Setapp** later, for discovery and payments; needs notarization anyway.
+5. **Mac App Store** only ever for a cut-down viewer, if at all.
+
+### iPhone: PWA first, then TestFlight, then App Store
+
+1. **PWA** served by the Mac over Tailscale: home-screen icon, full screen, web push (iOS 16.4+). No review, ships at once, same code on Android. Limits: no background work, weaker push, no PiP video.
+2. **Native iOS app on TestFlight** (free with the developer account, 10,000 testers, 90-day builds) once people want PiP live view and reliable push. **App Store** after that.
+3. Zero-app fallbacks that already work: ntfy / Pushover / Telegram for alerts, Screen Sharing for the picture.
+4. Web distribution of iOS apps exists only in the EU with its own fees; ignore for now.
+
+### How the phone reaches the Mac
+
+1. **Peer-to-peer, no server (v1):** Tailscale (or ZeroTier / NetBird). The Mac serves the PWA and API on its private IP. Free, encrypted, no data through anyone's server. Cost: users install Tailscale on both devices. `tsnet` or Tailscale Serve can give the Mac a real HTTPS certificate.
+2. **Small relay we host (later, the paid layer):** Cloudflare Tunnel or a Fly.io / Cloudflare Worker that brokers WebRTC or WebSocket plus push (APNs, web push). Removes the Tailscale requirement; adds a service people depend on.
+3. **Full backend** (accounts, history, team dashboards) only when there is a team product. Changes the privacy story.
+4. **Out of the box:** CloudKit as a free Apple-hosted relay between one person's own Mac and iPhone; or a Telegram / Discord bot as the whole control channel (push, buttons, screenshots, no app).
+
+### Business shape
+
+- Open-source core (MIT, like Insomnia) for trust: the app runs `sudo` and pauses other apps, and people will want to read it.
+- Paid layer: the native phone app and/or the hosted relay. One-time purchase through Lemon Squeezy or Paddle (they handle tax) unless the relay makes a subscription honest.
+
+### Order of work
+
+1. Pay the Apple Developer fee now (notarization and TestFlight both need it).
+2. Mac: notarized release + Homebrew cask + Sparkle; keep `install.sh`.
+3. Phone: PWA over Tailscale with web push; ntfy / Pushover as fallback.
+4. Native iOS app on TestFlight; App Store after.
+5. Relay service as the paid option for people who will not install Tailscale.
