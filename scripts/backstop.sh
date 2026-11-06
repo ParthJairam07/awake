@@ -1,10 +1,10 @@
 #!/bin/bash
-# Insomnia backstop: restore the machine from the JSON journal alone.
+# Awake backstop: restore the machine from the JSON journal alone.
 # Runs from launchd (RunAtLoad + StartInterval 60, installed by install.sh)
-# and from install.sh / uninstall.sh. Needs no Insomnia process and no Swift.
+# and from install.sh / uninstall.sh. Needs no Awake process and no Swift.
 #
 # Where it lives: install.sh copies this file into the app bundle at
-# Insomnia.app/Contents/Resources/backstop.sh before signing the bundle, so
+# Awake.app/Contents/Resources/backstop.sh before signing the bundle, so
 # the signature's resource seal covers it. The LaunchAgent's command line
 # runs `codesign --verify --strict` on the bundle against the requirement
 # pinned in the plist (for an ad-hoc build, the cdhash of that build) and
@@ -38,7 +38,7 @@
 #       frozenProcesses     -> SIGCONT, but only to a pid verified to be the
 #                              process the app froze. Entries that record
 #                              startedAtMicros are handed to the installed
-#                              app binary (INSOMNIA_BIN --resume-frozen
+#                              app binary (AWAKE_BIN --resume-frozen
 #                              <seconds>) in one call with a time limit, one
 #                              line per entry on its standard input. For
 #                              each entry in turn it does one kernel lookup
@@ -48,7 +48,7 @@
 #                              such an entry itself. The binary runs only
 #                              when the bundle's Info.plist declares the
 #                              interface version this script speaks
-#                              (InsomniaResumeFrozenVersion), and it keeps
+#                              (AwakeResumeFrozenVersion), and it keeps
 #                              the lock on fd 9 until it exits, which it does
 #                              by itself after <seconds>. When the binary is
 #                              missing, does not declare that version, cannot
@@ -156,7 +156,7 @@
 # --force: treat the session as expired even if endsAt is in the future
 # (used by install.sh / uninstall.sh to end a stale session deliberately).
 #
-# Honours INSOMNIA_HOME with the same layout as the app (see Paths.swift).
+# Honours AWAKE_HOME with the same layout as the app (see Paths.swift).
 set -euo pipefail
 export LC_ALL=C TZ=UTC
 # Everything this run creates (log lines, the lock file, the published
@@ -185,12 +185,12 @@ MKTEMP=/usr/bin/mktemp
 STAT=/usr/bin/stat
 # The installed app binary, for the microsecond identity check of
 # frozenProcesses entries (see above), and the bundle's Info.plist, which
-# must declare InsomniaResumeFrozenVersion RESUME_FROZEN_VERSION before the
+# must declare AwakeResumeFrozenVersion RESUME_FROZEN_VERSION before the
 # binary is run: an older build has no such mode and would open the menu bar
 # app instead. Fixed paths like the tools, never PATH. install.sh puts the
 # bundle here, copying the binary before Info.plist.
-INSOMNIA_BIN="${HOME:-}/Applications/Insomnia.app/Contents/MacOS/Insomnia"
-INSOMNIA_INFO="${HOME:-}/Applications/Insomnia.app/Contents/Info.plist"
+AWAKE_BIN="${HOME:-}/Applications/Awake.app/Contents/MacOS/Awake"
+AWAKE_INFO="${HOME:-}/Applications/Awake.app/Contents/Info.plist"
 RESUME_FROZEN_VERSION=1
 LOCK_TIMEOUT_SECONDS=10
 # Longest a single undo command (sudo pmset, defaults) may run before it is
@@ -207,17 +207,17 @@ for arg in "$@"; do
   esac
 done
 
-if [[ -n "${INSOMNIA_HOME:-}" ]]; then
-  APP_SUPPORT="$INSOMNIA_HOME"
-  LOG_DIR="$INSOMNIA_HOME/Logs"
+if [[ -n "${AWAKE_HOME:-}" ]]; then
+  APP_SUPPORT="$AWAKE_HOME"
+  LOG_DIR="$AWAKE_HOME/Logs"
 else
-  APP_SUPPORT="$HOME/Library/Application Support/Insomnia"
-  LOG_DIR="$HOME/Library/Logs/Insomnia"
+  APP_SUPPORT="$HOME/Library/Application Support/Awake"
+  LOG_DIR="$HOME/Library/Logs/Awake"
 fi
 SESSION="$APP_SUPPORT/session.json"
 STATE="$APP_SUPPORT/state.json"
 LOCK="$APP_SUPPORT/.recovery.lock"
-LOG="$LOG_DIR/insomnia.log"
+LOG="$LOG_DIR/awake.log"
 
 log() { # level message
   "$MKDIR" -p "$LOG_DIR"
@@ -392,7 +392,7 @@ run_bounded() { # command args...
       log error "'$*' did not finish within ${COMMAND_TIMEOUT_SECONDS}s; terminated with SIGTERM (pid ${cpid:-?})"
       rc=124 ;;
     alive)
-      log error "'$*' (pid ${cpid:-?}) did not finish within ${COMMAND_TIMEOUT_SECONDS}s and did not stop on SIGTERM. It is not killed, because that could leave a root pmset running outside the transaction. It keeps the recovery lock until it ends, so Insomnia cannot start and recovery cannot run until then; stop it by hand (sudo kill ${cpid:-<pid>}, after 'ps -p ${cpid:-<pid>}' shows that pid is still this command) and the next run will retry"
+      log error "'$*' (pid ${cpid:-?}) did not finish within ${COMMAND_TIMEOUT_SECONDS}s and did not stop on SIGTERM. It is not killed, because that could leave a root pmset running outside the transaction. It keeps the recovery lock until it ends, so Awake cannot start and recovery cannot run until then; stop it by hand (sudo kill ${cpid:-<pid>}, after 'ps -p ${cpid:-<pid>}' shows that pid is still this command) and the next run will retry"
       command_alive=1
       return 125 ;;
     *)
@@ -928,7 +928,7 @@ if [[ "$journal_state" == malformed ]]; then
   while IFS= read -r line; do
     [[ -n "$line" ]] && log error "$STATE: $line"
   done <<< "$shape_problems"
-  log error "$STATE is unreadable or malformed; nothing undone, evidence kept. Open Insomnia or repair the file, then rerun"
+  log error "$STATE is unreadable or malformed; nothing undone, evidence kept. Open Awake or repair the file, then rerun"
   exit 1
 fi
 
@@ -1164,22 +1164,22 @@ resume_via_app() {
   local n=${#app_pid[@]} k rc=0 valid=1 settled=1 expected=0 size line word excerpt="" p answer declared
   local -a words
   words=()
-  if [[ ! -x "$INSOMNIA_BIN" ]]; then
+  if [[ ! -x "$AWAKE_BIN" ]]; then
     for (( k = 0; k < n; k++ )); do
-      log error "pid ${app_pid[k]} needs the app binary for its microsecond identity check, but $INSOMNIA_BIN is missing or not executable; kept, not signaled"
-      failures+=("pid ${app_pid[k]} was not resumed: app binary missing at $INSOMNIA_BIN")
+      log error "pid ${app_pid[k]} needs the app binary for its microsecond identity check, but $AWAKE_BIN is missing or not executable; kept, not signaled"
+      failures+=("pid ${app_pid[k]} was not resumed: app binary missing at $AWAKE_BIN")
       keep_entry "${app_index[k]}"
     done
     return 0
   fi
   # A regular file only: a FIFO there could block this run under the lock.
   declared=""
-  if [[ -f "$INSOMNIA_INFO" ]]; then
-    declared="$(extract "$INSOMNIA_INFO" InsomniaResumeFrozenVersion || true)"
+  if [[ -f "$AWAKE_INFO" ]]; then
+    declared="$(extract "$AWAKE_INFO" AwakeResumeFrozenVersion || true)"
   fi
   if [[ "$declared" != "$RESUME_FROZEN_VERSION" ]]; then
     for (( k = 0; k < n; k++ )); do
-      log error "pid ${app_pid[k]} needs the app binary for its microsecond identity check, but $INSOMNIA_INFO declares InsomniaResumeFrozenVersion '${declared}', not $RESUME_FROZEN_VERSION (an older or newer build); the binary was not run; kept, not signaled"
+      log error "pid ${app_pid[k]} needs the app binary for its microsecond identity check, but $AWAKE_INFO declares AwakeResumeFrozenVersion '${declared}', not $RESUME_FROZEN_VERSION (an older or newer build); the binary was not run; kept, not signaled"
       failures+=("pid ${app_pid[k]} was not resumed: the installed app does not declare --resume-frozen version $RESUME_FROZEN_VERSION")
       keep_entry "${app_index[k]}"
     done
@@ -1198,7 +1198,7 @@ resume_via_app() {
     log error "could not write the app binary's input in $app_answer_dir"
     rc=125
   else
-    run_app_bounded "$INSOMNIA_BIN" --resume-frozen "$((COMMAND_TIMEOUT_SECONDS + KILL_GRACE_SECONDS))" || rc=$?
+    run_app_bounded "$AWAKE_BIN" --resume-frozen "$((COMMAND_TIMEOUT_SECONDS + KILL_GRACE_SECONDS))" || rc=$?
   fi
   if (( rc == 125 )) || [[ ! -f "$app_answer_dir/out" ]]; then
     valid=0
@@ -1229,7 +1229,7 @@ resume_via_app() {
   (( settled )) || expected=1
   (( rc == expected )) || valid=0
   if (( valid == 0 )); then
-    log error "unexpected answer from $INSOMNIA_BIN for pid(s) ${app_pid[*]} (exit $rc, output '$excerpt'); all kept, not signaled"
+    log error "unexpected answer from $AWAKE_BIN for pid(s) ${app_pid[*]} (exit $rc, output '$excerpt'); all kept, not signaled"
     for (( k = 0; k < n; k++ )); do
       failures+=("pid ${app_pid[k]} was not resumed: unexpected answer from the app binary")
       keep_entry "${app_index[k]}"
@@ -1428,8 +1428,8 @@ if (( has_audio == 1 || has_display == 1 || has_keyboard == 1 )); then
   (( has_audio == 1 )) && pending+=("saved audio (volume/mute)")
   (( has_display == 1 )) && pending+=("saved display brightness")
   (( has_keyboard == 1 )) && pending+=("saved keyboard backlight")
-  log error "$(IFS=,; echo "${pending[*]}") can only be restored by the app; kept. Open Insomnia"
-  failures+=("saved audio, display brightness or keyboard backlight settings need the app: open Insomnia to restore them")
+  log error "$(IFS=,; echo "${pending[*]}") can only be restored by the app; kept. Open Awake"
+  failures+=("saved audio, display brightness or keyboard backlight settings need the app: open Awake to restore them")
 fi
 [[ -n "$refused_note" ]] && log info "$refused_note"
 

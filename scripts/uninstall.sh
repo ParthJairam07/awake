@@ -12,12 +12,12 @@
 # backstop nor a relaunched app can republish the journal while it is being
 # removed.
 #
-# If anything Insomnia changed is still journaled, nothing is removed: the
+# If anything Awake changed is still journaled, nothing is removed: the
 # LaunchAgent keeps retrying every minute, the sudoers rule keeps pmset
 # undoable, and state.json keeps the evidence. The message says what to do.
 # A brightness the app kept because its private-call guard refused the
 # restore on this macOS does not stop the uninstall, since nothing here can
-# restore it; state.json is kept, even with --purge, so a later Insomnia
+# restore it; state.json is kept, even with --purge, so a later Awake
 # that can make the call restores it at launch. The app's records about that
 # entry and about a restore under its Low Power Mode (displayRestoredUnderLowPower,
 # keptDisplayUnderLowPower, keptDisplayUnderLowPowerBoot, keptDisplayReadLit)
@@ -31,7 +31,7 @@
 # their escapes decoded, as the app does.
 #
 # Deletion is by exact owned file, never by directory tree: --purge removes
-# the files Insomnia writes (see Paths.swift), the session.json copies the
+# the files Awake writes (see Paths.swift), the session.json copies the
 # app or backstop.sh moved aside (session.json.unreadable-<stamp>, only that
 # exact shape), and then rmdir's its own directories only if they are empty.
 # Only regular files are removed; anything else at one of those paths is
@@ -41,7 +41,7 @@
 # matched by the exact names install.sh gives them, and the agent plist goes
 # with the candidate plists install.sh and the app stage it from.
 #
-# Honours INSOMNIA_HOME with the same layout as the app (see Paths.swift).
+# Honours AWAKE_HOME with the same layout as the app (see Paths.swift).
 set -euo pipefail
 
 PURGE=0
@@ -59,7 +59,7 @@ done
 # backstop.sh, so one found beside its uninstall.sh was added after the zip
 # was unpacked, for example by another account that created the folder in
 # /tmp beforehand. Never the folder above either: a zip unpacked at
-# /tmp/Insomnia-<version> would make that /tmp, where any account can create
+# /tmp/Awake-<version> would make that /tmp, where any account can create
 # scripts/backstop.sh.
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 in_checkout() { [[ "${SCRIPT_DIR##*/}" == scripts && -f "${SCRIPT_DIR%/*}/Package.swift" ]]; }
@@ -90,30 +90,30 @@ QUIT_WAIT_SECONDS=10
 # backstop.sh bounds its own commands; the two sudo calls
 # prompt for a password and are left to sudo's own prompt timeout.
 CALL_TIMEOUT_SECONDS=30
-APP="$HOME/Applications/Insomnia.app"
-SUDOERS=/etc/sudoers.d/insomnia
+APP="$HOME/Applications/Awake.app"
+SUDOERS=/etc/sudoers.d/awake
 # The --resume-frozen interface version this checkout's backstop.sh speaks
 # (see step 3).
 RESUME_FROZEN_VERSION=1
 
-if [[ -n "${INSOMNIA_HOME:-}" ]]; then
-  APP_SUPPORT="$INSOMNIA_HOME"
-  LOG_DIR="$INSOMNIA_HOME/Logs"
-  LAUNCH_AGENTS="$INSOMNIA_HOME/LaunchAgents"
+if [[ -n "${AWAKE_HOME:-}" ]]; then
+  APP_SUPPORT="$AWAKE_HOME"
+  LOG_DIR="$AWAKE_HOME/Logs"
+  LAUNCH_AGENTS="$AWAKE_HOME/LaunchAgents"
   OWN_LAUNCH_AGENTS_DIR=1
 else
-  APP_SUPPORT="$HOME/Library/Application Support/Insomnia"
-  LOG_DIR="$HOME/Library/Logs/Insomnia"
+  APP_SUPPORT="$HOME/Library/Application Support/Awake"
+  LOG_DIR="$HOME/Library/Logs/Awake"
   LAUNCH_AGENTS="$HOME/Library/LaunchAgents"
   OWN_LAUNCH_AGENTS_DIR=0
 fi
-LABEL="com.insomnia.backstop"
+LABEL="com.awake.backstop"
 PLIST="$LAUNCH_AGENTS/$LABEL.plist"
 SESSION="$APP_SUPPORT/session.json"
 STATE="$APP_SUPPORT/state.json"
 CONFIG="$APP_SUPPORT/config.json"
 # The agent list the app ships with (Config.defaultAgentList in
-# Sources/Insomnia/Model/Config.swift; a test keeps this copy in step). An
+# Sources/Awake/Model/Config.swift; a test keeps this copy in step). An
 # older build may have set NSAppSleepDisabled for any of these, even one the
 # user later took off the list in config.json, so the check below covers
 # both lists.
@@ -145,7 +145,7 @@ UID_NUM="$(id -u)"
 step() { printf '\n==> %s\n' "$*"; }
 
 # Scratch space for bounded(): this run's own directory, emptied on exit.
-WORK="$("$MKTEMP" -d "${TMPDIR:-/tmp}/insomnia-uninstall.XXXXXX")"
+WORK="$("$MKTEMP" -d "${TMPDIR:-/tmp}/awake-uninstall.XXXXXX")"
 trap '"$RM" -f "$WORK"/call.* 2>/dev/null; "$RMDIR" "$WORK" 2>/dev/null || true' EXIT
 
 # Run one external call with a time limit. Its combined output is left in
@@ -223,7 +223,7 @@ supervise() { # base command args...
 
 # Fail closed on paths that are not the exact things install.sh created.
 case "$APP_SUPPORT" in /*) ;; *) echo "refusing: app support path is not absolute: $APP_SUPPORT" >&2; exit 1 ;; esac
-[[ "$(basename "$APP")" == "Insomnia.app" ]] || { echo "refusing: $APP is not an Insomnia.app bundle path" >&2; exit 1; }
+[[ "$(basename "$APP")" == "Awake.app" ]] || { echo "refusing: $APP is not an Awake.app bundle path" >&2; exit 1; }
 
 extract() { # file keypath (raw scalar; non-zero if missing)
   "$PLUTIL" -extract "$2" raw -o - "$1" 2>/dev/null
@@ -688,7 +688,7 @@ list_unrecorded_app_nap() {
     if (( found == 0 )); then
       found=1
       cat <<MSG
-NSAppSleepDisabled is YES for these agent apps and Insomnia has no record of
+NSAppSleepDisabled is YES for these agent apps and Awake has no record of
 what it was before (an older build set it without recording). They are left
 as they are. To turn App Nap back on for one, run:
 MSG
@@ -713,8 +713,8 @@ MSG
 # name (a directory, a FIFO, a symlink) goes to NOT_MOVED_ASIDE and is never
 # removed, even when the app or backstop.sh renamed it there: a session.json
 # that cannot be read is moved without being opened, whatever it is, and
-# Insomnia did not create its contents. Other names under the prefix are
-# not Insomnia's and are skipped.
+# Awake did not create its contents. Other names under the prefix are
+# not Awake's and are skipped.
 collect_moved_aside_sessions() {
   local f
   MOVED_ASIDE=()
@@ -731,8 +731,8 @@ collect_moved_aside_sessions() {
   return 0
 }
 
-# Removes files Insomnia wrote, one path per argument. Only a regular file
-# is removed. Anything else at one of these paths is not something Insomnia
+# Removes files Awake wrote, one path per argument. Only a regular file
+# is removed. Anything else at one of these paths is not something Awake
 # wrote; it is left and named, so a stray directory never stops the run
 # halfway. A removal that fails is named and counted, and the rest go on.
 remove_failures=0
@@ -745,7 +745,7 @@ remove_owned() { # path...
         remove_failures=$((remove_failures + 1))
       fi
     elif [[ -e "$f" || -L "$f" ]]; then
-      echo "Left $f: it is not a regular file, so Insomnia did not write it."
+      echo "Left $f: it is not a regular file, so Awake did not write it."
     fi
   done
   return 0
@@ -755,7 +755,7 @@ abort_incomplete() { # backstop exit status, problem lines...
   local rc="$1"; shift
   cat >&2 <<MSG
 
-Uninstall stopped BEFORE removing anything: Insomnia's changes are not fully
+Uninstall stopped BEFORE removing anything: Awake's changes are not fully
 undone (backstop exit status $rc). Still journaled in $STATE:
 MSG
   local p
@@ -767,20 +767,20 @@ the sudoers rule keeps pmset undoable, and the journal keeps the evidence.
 
 What to do, then rerun this script:
   - Saved audio (volume/mute), display brightness or keyboard backlight:
-    open Insomnia.app; it restores them from the journal at launch. If the
+    open Awake.app; it restores them from the journal at launch. If the
     display is dark, press the brightness-up key first.
   - An output device still muted from a lid close: connect it and open
-    Insomnia.app, which restores its volume. If the device is gone for
-    good, open Insomnia.app and choose "Stop waiting for <device>" in its
+    Awake.app, which restores its volume. If the device is gone for
+    good, open Awake.app and choose "Stop waiting for <device>" in its
     menu; the device then stays as it is.
   - pmset failures (sleep / Low Power Mode): check $SUDOERS
     (rerun scripts/install.sh to reinstall it), or run
     'sudo pmset -a disablesleep 0' / 'sudo pmset -b lowpowermode 0' yourself.
-  - Frozen or legacy pids: open Insomnia.app to resolve them, or inspect each
+  - Frozen or legacy pids: open Awake.app to resolve them, or inspect each
     with 'ps -o pid,stat,lstart,command -p <pid>' and 'kill -CONT <pid>' it
     yourself if it is a process you recognise.
   - App Nap (NSAppSleepDisabled): the recovery agent retries 'defaults write'
-    or 'defaults delete' every minute, and Insomnia.app restores them at
+    or 'defaults delete' every minute, and Awake.app restores them at
     launch. If 'defaults' keeps failing, see the log.
   - Unreadable state.json: neither the app nor the recovery agent repairs or
     removes it. Repair it by hand from the log, or move it away yourself once
@@ -794,12 +794,12 @@ What to do, then rerun this script:
     is still here, that rename failed (see the log): remove it or move it
     out of this folder, then rerun. Do not make it readable where it is:
     the app would then resume it.
-  - Log: $LOG_DIR/insomnia.log
+  - Log: $LOG_DIR/awake.log
 MSG
   exit 1
 }
 
-# Kong's Insomnia API client runs an executable named Insomnia too, so
+# Kong's Insomnia API client runs an executable named Insomnia (this app's name before the Awake fork; the check is kept), so
 # `pgrep -x Insomnia` finds it as well. A pid pgrep found is skipped only
 # when `codesign --verify` passes it against API_CLIENT_REQUIREMENT: the
 # code the process runs is signed with a certificate Apple issued (such as
@@ -843,9 +843,9 @@ only_api_client() { # pgrep-output
 # Finding only the API client is finding none.
 app_running() {
   local rc=0
-  bounded "$PGREP" -x Insomnia || rc=$?
+  bounded "$PGREP" -x Awake || rc=$?
   if (( rc == 124 )); then
-    echo "pgrep did not answer within ${CALL_TIMEOUT_SECONDS}s; treating Insomnia as running." >&2
+    echo "pgrep did not answer within ${CALL_TIMEOUT_SECONDS}s; treating Awake as running." >&2
     return 0
   fi
   if (( rc == 0 )) && only_api_client "$BOUNDED_OUTPUT"; then
@@ -857,15 +857,15 @@ app_running() {
 # 1. Quit the app --------------------------------------------------------------
 # Ask politely and wait. The app refuses to quit while it has unresolved
 # recovery work, and that refusal must stand: no pkill, no force.
-step "Quitting Insomnia"
+step "Quitting Awake"
 if app_running; then
-  "$OSASCRIPT" -e 'tell application id "com.kgarg.insomnia" to quit' >/dev/null 2>&1 || true
+  "$OSASCRIPT" -e 'tell application id "com.parthjairam.awake" to quit' >/dev/null 2>&1 || true
   for (( i = 0; i < QUIT_WAIT_SECONDS; i++ )); do
     app_running || break
     sleep 1
   done
   if app_running; then
-    echo "Insomnia is still running (it may be refusing to quit until its own recovery finishes)." >&2
+    echo "Awake is still running (it may be refusing to quit until its own recovery finishes)." >&2
     echo "Let it finish or quit it from its menu, then rerun. Nothing was removed." >&2
     exit 1
   fi
@@ -883,7 +883,7 @@ if (( lock_rc != 0 )); then
   exit 75
 fi
 if app_running; then
-  echo "Insomnia started again; quit it and rerun. Nothing was removed." >&2
+  echo "Awake started again; quit it and rerun. Nothing was removed." >&2
   exit 1
 fi
 
@@ -891,7 +891,7 @@ fi
 # The backstop inherits fd 9 and shares this lock instead of waiting on it.
 # From a source checkout, the checkout's backstop.sh hands frozen entries
 # that record microseconds to the installed app binary, and runs that binary
-# only when the bundle's Info.plist declares InsomniaResumeFrozenVersion
+# only when the bundle's Info.plist declares AwakeResumeFrozenVersion
 # RESUME_FROZEN_VERSION (the same value as in backstop.sh; a test keeps the
 # two in step). So the checkout's copy runs when the app declares that
 # version. An app that does not was installed together with its own
@@ -917,7 +917,7 @@ if in_checkout && [[ -f "$SCRIPT_DIR/backstop.sh" ]]; then
 fi
 installed_version=""
 if [[ -f "$APP/Contents/Info.plist" ]]; then
-  installed_version="$(extract "$APP/Contents/Info.plist" InsomniaResumeFrozenVersion || true)"
+  installed_version="$(extract "$APP/Contents/Info.plist" AwakeResumeFrozenVersion || true)"
 fi
 if [[ -n "$CHECKOUT_BACKSTOP" ]] && { [[ "$installed_version" == "$RESUME_FROZEN_VERSION" ]] || { [[ ! -f "$APP/Contents/Resources/backstop.sh" ]] && [[ ! -f "$APP_SUPPORT/backstop.sh" ]]; }; }; then
   BACKSTOP="$CHECKOUT_BACKSTOP"
@@ -926,11 +926,11 @@ elif [[ -f "$APP/Contents/Resources/backstop.sh" ]]; then
   bounded "$CODESIGN" --verify --strict "$APP" || verify_rc=$?
   if (( verify_rc == 124 )); then
     echo "'codesign --verify --strict $APP' did not answer within ${CALL_TIMEOUT_SECONDS}s, so the backstop.sh sealed in it was not run." >&2
-    echo "Nothing was removed. Rerun once codesign answers, or run scripts/uninstall.sh from a checkout of the source: it runs its own backstop.sh when this app declares InsomniaResumeFrozenVersion $RESUME_FROZEN_VERSION." >&2
+    echo "Nothing was removed. Rerun once codesign answers, or run scripts/uninstall.sh from a checkout of the source: it runs its own backstop.sh when this app declares AwakeResumeFrozenVersion $RESUME_FROZEN_VERSION." >&2
     exit 1
   elif (( verify_rc != 0 )); then
     echo "$APP does not pass 'codesign --verify --strict' (exit $verify_rc: ${BOUNDED_OUTPUT:-no detail}), so the backstop.sh sealed in it was not run." >&2
-    echo "Nothing was removed. Reinstall and rerun, or run scripts/uninstall.sh from a checkout of the source: it runs its own backstop.sh when this app declares InsomniaResumeFrozenVersion $RESUME_FROZEN_VERSION." >&2
+    echo "Nothing was removed. Reinstall and rerun, or run scripts/uninstall.sh from a checkout of the source: it runs its own backstop.sh when this app declares AwakeResumeFrozenVersion $RESUME_FROZEN_VERSION." >&2
     exit 1
   fi
   echo "$APP verifies"
@@ -946,7 +946,7 @@ else
   exit 1
 fi
 if [[ -n "$CHECKOUT_BACKSTOP" && "$BACKSTOP" != "$CHECKOUT_BACKSTOP" ]]; then
-  echo "$APP does not declare InsomniaResumeFrozenVersion $RESUME_FROZEN_VERSION; using the backstop installed with it, $BACKSTOP"
+  echo "$APP does not declare AwakeResumeFrozenVersion $RESUME_FROZEN_VERSION; using the backstop installed with it, $BACKSTOP"
 fi
 echo "using $BACKSTOP"
 recovery_rc=0
@@ -959,7 +959,7 @@ while IFS= read -r line; do
   [[ -n "$line" ]] && problems+=("$line")
 done < <(journal_problems)
 if (( recovery_rc != 0 )) && (( ${#problems[@]} == 0 )); then
-  problems+=("backstop exited $recovery_rc; see $LOG_DIR/insomnia.log")
+  problems+=("backstop exited $recovery_rc; see $LOG_DIR/awake.log")
 fi
 if (( ${#problems[@]} > 0 )); then
   abort_incomplete "$recovery_rc" "${problems[@]}"
@@ -972,12 +972,12 @@ done < <(refused_brightness)
 if (( ${#kept_brightness[@]} > 0 )); then
   echo "Not restored, and kept in $STATE:"
   for line in "${kept_brightness[@]}"; do echo "  - $line"; done
-  echo "Insomnia's private-call guard refused that restore on this macOS, so nothing here can"
+  echo "Awake's private-call guard refused that restore on this macOS, so nothing here can"
   echo "make it. Set the level with the brightness keys or Control Center. The file stays so a"
-  echo "later Insomnia that can make the call restores it at launch."
+  echo "later Awake that can make the call restores it at launch."
 fi
 if app_running; then
-  echo "Insomnia started again; quit it and rerun. Nothing was removed." >&2
+  echo "Awake started again; quit it and rerun. Nothing was removed." >&2
   exit 1
 fi
 
@@ -1028,21 +1028,21 @@ fi
 step "Removing app bundle"
 "$RM" -rf "$APP"
 # install.sh's leftovers beside the bundle, by the exact names it gives them.
-# An upgrade sets the previous bundle aside at .Insomnia.app.previous during
-# its swap and assembles the new one in .Insomnia.app.staging.<pid>.<six
+# An upgrade sets the previous bundle aside at .Awake.app.previous during
+# its swap and assembles the new one in .Awake.app.staging.<pid>.<six
 # letters and digits> (mktemp). The swap runs under the recovery lock, which
 # this script holds, so a set-aside bundle belongs to a run that was stopped.
 # A staging directory whose run is still alive belongs to an install that
 # has not reached the lock yet, and stays. kill -0 only asks whether the
 # process exists; it sends no signal. Symlinks and any other name are left.
 APP_DIR="$(dirname "$APP")"
-PREVIOUS_APP="$APP_DIR/.Insomnia.app.previous"
+PREVIOUS_APP="$APP_DIR/.Awake.app.previous"
 if [[ -d "$PREVIOUS_APP" && ! -L "$PREVIOUS_APP" ]]; then
   "$RM" -rf "$PREVIOUS_APP"
   echo "removed $PREVIOUS_APP, the previous bundle an interrupted install set aside"
 fi
-staging_re='^\.Insomnia\.app\.staging\.([0-9]+)\.[A-Za-z0-9]{6}$'
-for dir in "$APP_DIR"/.Insomnia.app.staging.*; do
+staging_re='^\.Awake\.app\.staging\.([0-9]+)\.[A-Za-z0-9]{6}$'
+for dir in "$APP_DIR"/.Awake.app.staging.*; do
   [[ -d "$dir" && ! -L "$dir" ]] || continue
   [[ "${dir##*/}" =~ $staging_re ]] || continue
   owner="${BASH_REMATCH[1]}"
@@ -1057,10 +1057,10 @@ done
 # $APP_SUPPORT/backstop.sh below is the writable copy of older installs; the
 # current one went with the bundle.
 if (( PURGE == 1 )); then
-  step "Purging Insomnia's files in $APP_SUPPORT and $LOG_DIR"
+  step "Purging Awake's files in $APP_SUPPORT and $LOG_DIR"
   remove_owned "$SESSION" "$APP_SUPPORT/config.json" "$APP_SUPPORT/backstop.sh" \
         "$APP_SUPPORT/unfinished-command.json" \
-        "$LOG_DIR/insomnia.log" "$LOG_DIR/insomnia.log.1" \
+        "$LOG_DIR/awake.log" "$LOG_DIR/awake.log.1" \
         "$LOG_DIR/handoffs.log" "$LOG_DIR/handoffs.log.1"
   (( ${#kept_brightness[@]} > 0 )) || remove_owned "$STATE"
   collect_moved_aside_sessions
@@ -1080,7 +1080,7 @@ if (( PURGE == 1 )); then
   "$RMDIR" "$LOG_DIR" 2>/dev/null || true
   (( OWN_LAUNCH_AGENTS_DIR == 1 )) && { "$RMDIR" "$LAUNCH_AGENTS" 2>/dev/null || true; }
   echo "Kept $LOCK (the recovery lock is never unlinked; delete $APP_SUPPORT by hand if you want it gone)."
-  [[ -d "$LOG_DIR" ]] && echo "Kept $LOG_DIR: it still holds files Insomnia did not create."
+  [[ -d "$LOG_DIR" ]] && echo "Kept $LOG_DIR: it still holds files Awake did not create."
 else
   # unfinished-command.json names a sudo pmset that held the recovery lock;
   # this run holds it now, so that command has exited.

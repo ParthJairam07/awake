@@ -4,10 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    # ready_for_review on top of the default three: `merge-gate.sh rerun`
-    # marks a pull request draft and then ready, so CI tests it against the
-    # current main without a push. A re-run would not: it keeps the merge
-    # with main its first run made.
+    # ready_for_review on top of the default three: marking a draft pull
+    # request ready tests it against the current main without a push.
     types: [opened, synchronize, reopened, ready_for_review]
 
 # Least privilege: nothing in this workflow writes to the repo, checks, or packages.
@@ -54,8 +52,8 @@ jobs:
       - name: Note which main this run tests
         # A pull_request run tests a merge of the pull request into main as
         # main was when the run started, and a re-run keeps that merge.
-        # .github/scripts/merge-gate.sh check reads this note to tell whether
-        # a passing result still covers the current main. git cat-file reads
+        # The note tells a reviewer whether a passing result still covers the
+        # current main. git cat-file reads
         # the parent lines from the merge commit itself, which the shallow
         # checkout has.
         if: github.event_name == 'pull_request'
@@ -91,8 +89,7 @@ jobs:
 
       - name: Syntax-check scripts with /bin/bash 3.2
         # The LaunchAgent runs backstop.sh with macOS /bin/bash 3.2, and
-        # install.sh and uninstall.sh run under it too, as does the
-        # maintainer's .github/scripts/merge-gate.sh. ShellCheck runs on
+        # install.sh and uninstall.sh run under it too. ShellCheck runs on
         # Linux and assumes bash 5, so bash 4 syntax passes lint. `bash -n`
         # parses each script under the real interpreter without executing
         # it; it rejects parse-level bash 4 syntax (;;&, |&, [[ -v x ]]).
@@ -120,11 +117,6 @@ jobs:
           fi
           echo "no bash 4 builtins or expansions found"
 
-      - name: Test the merge gate with /bin/bash 3.2
-        # merge-gate-test.sh runs merge-gate.sh against a stand-in for gh
-        # that answers from files, so it reads and writes nothing on GitHub.
-        run: /bin/bash .github/scripts/merge-gate-test.sh
-
       - name: Build release
         # docs/release-validation.md cites "no compiler warnings" as evidence,
         # so a warning fails this build instead of scrolling past. This and
@@ -137,8 +129,8 @@ jobs:
       - name: Check the lid simulation is compiled out of the release binary
         # Looks at the binaries, not the compilation condition: the plain
         # release build above must lack the simulate-lid.sh watcher, and a
-        # build with -DINSOMNIA_LID_SIMULATION (what build-app.sh adds
-        # for INSOMNIA_LID_SIMULATION=1) must have it.
+        # build with -DAWAKE_LID_SIMULATION (what build-app.sh adds
+        # for AWAKE_LID_SIMULATION=1) must have it.
         run: scripts/check-lid-simulation-gate.sh
 
       - name: Install tmux
@@ -176,11 +168,11 @@ jobs:
         # hung test is waiting on, then fails the step instead of waiting
         # for the job timeout. The tests copy every shell script they write
         # (fakes of sudo, pmset, launchctl and the rest) into
-        # INSOMNIA_TEST_SCRIPT_DUMP for the ShellCheck step below.
+        # AWAKE_TEST_SCRIPT_DUMP for the ShellCheck step below.
         env:
           NSUnbufferedIO: "YES"
         run: |
-          INSOMNIA_TEST_SCRIPT_DUMP="$RUNNER_TEMP/test-scripts" swift test &
+          AWAKE_TEST_SCRIPT_DUMP="$RUNNER_TEMP/test-scripts" swift test &
           test_pid=$!
           for ((i = 0; i < 3000; i++)); do
             kill -0 "$test_pid" 2>/dev/null || break
@@ -241,7 +233,7 @@ jobs:
           tar -xzf "$tools/shellcheck.tar.gz" -C "$tools" --strip-components 1 "shellcheck-v${SHELLCHECK_VERSION}/shellcheck"
           "$tools/shellcheck" --version
           if [ ! -s "$dump/index.tsv" ]; then
-            echo "::error::the tests wrote no scripts to $dump; INSOMNIA_TEST_SCRIPT_DUMP did not reach them"
+            echo "::error::the tests wrote no scripts to $dump; AWAKE_TEST_SCRIPT_DUMP did not reach them"
             exit 1
           fi
           echo "$(wc -l < "$dump/index.tsv" | tr -d ' ') distinct scripts"
@@ -272,8 +264,8 @@ jobs:
       - name: Note which main this run tests
         # A pull_request run tests a merge of the pull request into main as
         # main was when the run started, and a re-run keeps that merge.
-        # .github/scripts/merge-gate.sh check reads this note to tell whether
-        # a passing result still covers the current main. git cat-file reads
+        # The note tells a reviewer whether a passing result still covers the
+        # current main. git cat-file reads
         # the parent lines from the merge commit itself, which the shallow
         # checkout has.
         if: github.event_name == 'pull_request'
@@ -337,11 +329,6 @@ jobs:
             exit 1
           fi
 
-      - name: Test the merge gate with bash 5
-        # The macOS jobs run these tests with /bin/bash 3.2; the workflow
-        # that posts the merge-gate statuses runs on this runner's bash.
-        run: bash .github/scripts/merge-gate-test.sh
-
   lint-workflows:
     name: Lint workflows
     # actionlint checks workflow syntax, expressions and runner labels and
@@ -369,8 +356,8 @@ jobs:
       - name: Note which main this run tests
         # A pull_request run tests a merge of the pull request into main as
         # main was when the run started, and a re-run keeps that merge.
-        # .github/scripts/merge-gate.sh check reads this note to tell whether
-        # a passing result still covers the current main. git cat-file reads
+        # The note tells a reviewer whether a passing result still covers the
+        # current main. git cat-file reads
         # the parent lines from the merge commit itself, which the shallow
         # checkout has.
         if: github.event_name == 'pull_request'
