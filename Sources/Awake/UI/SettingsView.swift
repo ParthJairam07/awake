@@ -534,6 +534,7 @@ struct SettingsView: View {
             if let notice = phone.notice {
                 Text(notice).font(.caption).foregroundStyle(.orange)
             }
+            Toggle("Post a summary when a session ends", isOn: bind(\.sessionSummary))
             Text("Tokens are kept in the login keychain, never in config.json. A topic on ntfy.sh is public to anyone who guesses its name: use a long random one, or a reserved topic with an access token.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

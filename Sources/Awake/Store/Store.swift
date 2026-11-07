@@ -189,6 +189,10 @@ struct Store: Sendable {
     func saveState(_ s: RuntimeState) throws { try write(s, to: paths.stateFile) }
 
     func loadConfig() throws -> Config? { try read(Config.self, from: paths.configFile) }
+
+    func loadReport() -> SessionReport? { try? read(SessionReport.self, from: paths.reportFile) }
+    func saveReport(_ r: SessionReport) throws { try write(r, to: paths.reportFile) }
+    func removeReport() throws { try remove(at: paths.reportFile) }
     func saveConfig(_ c: Config) throws { try write(c, to: paths.configFile) }
 
     /// nil when there is none, or it cannot be read: it only names the

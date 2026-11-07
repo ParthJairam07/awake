@@ -88,6 +88,10 @@ struct Paths: Sendable, Equatable {
     /// Written by scripts/simulate-lid.sh ("closed" or "open") to drive the
     /// lid-close action path without touching the hinge. See LidSimulation.
     var simulateLidFile: URL { appSupport.appendingPathComponent("simulate-lid") }
+    /// The running session's tally for the end-of-session summary.
+    var reportFile: URL { appSupport.appendingPathComponent("report.json") }
+    /// The menu's status as JSON for dashboards (phase 1).
+    var statusFile: URL { appSupport.appendingPathComponent("status.json") }
 
     /// Both logs are owner-only and rotate to `<name>.1` past
     /// `OwnerOnly.maxLogBytes`; uninstall.sh --purge removes the `.1` too.

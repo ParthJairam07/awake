@@ -167,6 +167,7 @@ struct FloorRuleDriver {
         let draining = isCharging && chargerDraining
         if draining, !drainingNotice.value {
             drainingNotice.value = true
+            manager.noteReport { $0.chargerWeakEvents += 1 }
             Log.info("charger too weak: battery \(PowerMonitor.describe(battery)) and falling on AC")
             notifier.post(title: "Charger too weak", body: Self.chargerTooWeakBody(percent: percent))
         } else if !draining, drainingNotice.value {
@@ -195,6 +196,7 @@ struct FloorRuleDriver {
             case let .enableLowPower(cause):
                 guard await manager.setLowPower(true) else { continue }
                 lastCause.value = cause
+                manager.noteReport { $0.lowPowerEvents += 1; if cause == .thermal { $0.thermalEvents += 1 } }
                 guard manager.isActive, !Task.isCancelled else { return }
                 switch cause {
                 case .thermal:

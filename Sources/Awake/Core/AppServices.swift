@@ -201,7 +201,10 @@ final class AppServices {
         let net = NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { [weak manager] in
             manager?.config ?? Config()
         }
-        net.onRecovered = { [weak self] gap in self?.status.lastGap = gap }
+        net.onRecovered = { [weak self] gap in
+            self?.status.lastGap = gap
+            self?.manager?.noteReport { $0.outages += 1; $0.outageSeconds += gap }
+        }
         net.onPasswordReport = { [weak self] report in self?.status.hotspotPasswordReport = report }
         network = net
         networkTask = Task { [weak self, weak net] in
@@ -423,7 +426,9 @@ final class AppServices {
             await previous?.value
             guard !Task.isCancelled, self.running else { return }
             switch policy {
-            case .close: await actions.onClose(event: event)
+            case .close:
+                self.manager?.noteReport { $0.lidCloses += 1 }
+                await actions.onClose(event: event)
             case .desk: Log.info("lid closed with an external display online: desk mode, lid actions skipped")
             // An open after a desk close has nothing to undo; the undo is
             // journal-driven and finds nothing. Cheap, and it also covers

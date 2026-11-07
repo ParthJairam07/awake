@@ -100,6 +100,9 @@ struct Config: Codable, Equatable, Sendable {
     var ntfyTopic: String = ""
     /// Pushover; the app token and user key live in the keychain.
     var pushoverEnabled: Bool = false
+    /// Post one summary notification when a session ends (duration,
+    /// battery, lid closes, outages, what was restored).
+    var sessionSummary: Bool = true
     /// Seconds of outage after which tmux panes are nudged.
     var nudgeThreshold: TimeInterval = 90
     /// tmux targets as `session:window.pane`. Only a pane carrying the
@@ -213,6 +216,7 @@ struct Config: Codable, Equatable, Sendable {
         ntfyServer = try c.decodeIfPresent(String.self, forKey: .ntfyServer) ?? d.ntfyServer
         ntfyTopic = try c.decodeIfPresent(String.self, forKey: .ntfyTopic) ?? d.ntfyTopic
         pushoverEnabled = try c.decodeIfPresent(Bool.self, forKey: .pushoverEnabled) ?? d.pushoverEnabled
+        sessionSummary = try c.decodeIfPresent(Bool.self, forKey: .sessionSummary) ?? d.sessionSummary
         hotspotSSID = try c.decodeIfPresent(String.self, forKey: .hotspotSSID) ?? d.hotspotSSID
         nudgeThreshold = try c.decodeIfPresent(TimeInterval.self, forKey: .nudgeThreshold) ?? d.nudgeThreshold
         tmuxTargets = try c.decodeIfPresent([String].self, forKey: .tmuxTargets) ?? d.tmuxTargets

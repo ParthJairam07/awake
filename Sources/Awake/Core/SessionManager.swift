@@ -440,6 +440,8 @@ final class SessionManager {
     /// System integrations (lid, battery, network, ...). Set by `live()`;
     /// nil in tests. Started after a session starts, stopped when it ends.
     @ObservationIgnored var services: AppServices?
+    /// The running session's tally (phase 1), journaled to report.json.
+    @ObservationIgnored private(set) var report: SessionReport?
 
     @ObservationIgnored private var deadlineTimer: Timer?
     @ObservationIgnored private var countdownTimer: Timer?
@@ -1271,6 +1273,8 @@ final class SessionManager {
         countdownPaused = clamshell() == true
         foreignSleepWarning = nil
         Log.info("session started until \(iso(new.endsAt)) (\(Int(duration))s requested)")
+        report = SessionReport(startedAt: new.startedAt, plannedEnd: new.endsAt, batteryStart: services?.status.batteryPercent)
+        saveReport()
         await armDeadline(new.endsAt)
         applyAppNapInJournal()
         // Every observer lives in AppServices.
@@ -1487,6 +1491,7 @@ final class SessionManager {
                 retry = "Awake retries in \(Int(recoveryRetryDelay)) s; do not quit until it is restored."
             }
             notifier.post(title: Self.incompleteTitle, body: "\(detail). \(retry)")
+            postSummary(reason: reason, restored: false)
             // Reconcile and a failed start reach here without `end()`; the
             // retry is scheduled here so they are covered too (rescheduling
             // from `end()` is harmless).
@@ -1494,7 +1499,80 @@ final class SessionManager {
             return .incomplete(agentArmed: agentCanFinish)
         }
         notifier.post(title: Self.endTitle(reason, had: had), body: endBody(reason, waiting: waiting))
+        postSummary(reason: reason, restored: true)
         return .restored
+    }
+
+    // MARK: Session report (phase 1)
+
+    /// Record one event of the running session; written through at once.
+    func noteReport(_ change: (inout SessionReport) -> Void) {
+        guard var r = report else { return }
+        change(&r)
+        report = r
+        saveReport()
+    }
+
+    private func saveReport() {
+        guard let report else { return }
+        do {
+            try store.saveReport(report)
+        } catch {
+            Log.error("report.json could not be written: \(error.localizedDescription)")
+        }
+    }
+
+    /// The one summary notification for a session that ended in this
+    /// process. Backstop and recovery ends without a report say nothing.
+    private func postSummary(reason: EndReason, restored: Bool) {
+        guard var r = report else { return }
+        report = nil
+        r.endedAt = clock()
+        r.endReason = reason.rawValue
+        r.batteryEnd = services?.status.batteryPercent
+        r.restored = restored
+        r.summaryPosted = true
+        if config.sessionSummary {
+            notifier.post(title: SessionReport.title, body: r.summary(now: clock(), endReasonText: Self.reasonText))
+        }
+        do {
+            try store.removeReport()
+        } catch {
+            Log.error("report.json could not be removed: \(error.localizedDescription)")
+        }
+    }
+
+    /// At launch: a report left on disk belongs to a session this process
+    /// did not see end. With the session still live (reconcile kept it)
+    /// the tally goes on; otherwise it is summarised now and removed.
+    func settleLeftoverReport() {
+        guard let left = store.loadReport() else { return }
+        if session != nil, report == nil {
+            report = left
+            Log.info("report.json resumed for the session found on disk")
+            return
+        }
+        guard session == nil else { return }
+        var r = left
+        r.summaryPosted = true
+        if config.sessionSummary {
+            notifier.post(title: SessionReport.title, body: r.summary(now: clock(), endReasonText: Self.reasonText))
+        }
+        try? store.removeReport()
+    }
+
+    static func reasonText(_ raw: String) -> String {
+        switch EndReason(rawValue: raw) {
+        case .timer: "time was up"
+        case .user: "ended by you"
+        case .quit: "Awake quit"
+        case .batteryFloor: "battery floor"
+        case .batteryUnreadable: "battery unreadable"
+        case .thermalCritical: "thermal critical"
+        case .batteryHot: "battery too hot"
+        case .backstop: "recovery agent"
+        default: raw
+        }
     }
 
     /// What an end checks before it reports a restore. A brightness kept
@@ -2509,6 +2587,7 @@ final class SessionManager {
         reconcileRetry?.cancel()
         reconcileRetry = nil
         await reconcile(ticket: endTicket, isRetry: false)
+        settleLeftoverReport()
     }
 
     private func reconcile(ticket: Int, isRetry: Bool) async {
