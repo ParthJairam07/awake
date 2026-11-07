@@ -32,10 +32,11 @@ The first list is the goal; the items marked *(today)* work now, the rest are pl
 - Lets agents ask for awake time themselves: a **lease** per task, released when done. The Mac stays awake while any lease is held, capped by a limit you set.
 
 **On the phone**
-- Push alerts for the things that matter: agent waiting for you, battery or heat, internet down, session ending, something not restored.
+- Push alerts for the things that matter: battery or heat, weak charger, internet down and back, session ending in 10 minutes, session ended, something not restored, disk or memory trouble; via ntfy or Pushover, tokens in your keychain. *(today)* Agent waiting/stalled alerts come with the agent layer.
 - One screen per agent, one tap to answer a prompt, nudge, pause, or stop it.
 - Extend or end the session, lock the screen, take a screenshot, commit and push a repo.
-- A morning summary: what ran, what finished, what stalled, outages, battery used.
+- A summary when the session ends: how long it ran, why it ended, battery used, lid closes, Low Power Mode and heat events, outages, whether everything was restored. *(today)* Agents and unpushed repos join it with the agent layer.
+- `status.json` and a local `http://127.0.0.1:<port>/status.json` for Raycast or SketchyBar. *(today)*
 
 ## Principles
 

@@ -46,10 +46,12 @@ Still to do for phase 0: the real-Mac checklist of section 7 (lid close with and
 
 ### 3.2 Phase 1: the phone gets the alerts (weeks 3–4)
 
-- Every alert also goes to the phone: ntfy and Pushover first (no app to build), Telegram and a webhook next.
-- Alert set: agent waiting for input, agent stalled, agent exited, battery or heat floor, internet down and back, session ending in 10 min, session ended, restore incomplete, pending OS restart.
-- **Morning summary**: duration, battery used, outages, thermal events, agents that ran, finished, stalled, repos with unpushed commits, anything not restored.
-- Local `status.json` and a tiny HTTP endpoint for dashboards (Raycast, SketchyBar).
+**Done:**
+
+- Every alert also goes to the phone: `PhoneAlerts` wraps the Mac notifier and forwards each post to the ntfy topic and/or Pushover account from Settings (tokens in the login keychain, service `awake-phone`), with one retry and one local "Phone alert failed" notice per launch. Telegram and a webhook are still to come.
+- Alert set today: battery, heat and weak-charger floors, Low Power Mode on/off, "Internet down" once an outage lasts the nudge threshold and "Internet back" / "Network recovered", "10 minutes left" (was 5, Mac-only), session ended, restore incomplete, screen not locked, memory pressure, disk almost full. Agent waiting/stalled/exited arrive with phase 2's registry; "pending OS restart" is deferred (no reliable public API).
+- **Session summary**: `report.json` tallies the session as it runs (lid closes, Low Power Mode and heat events, weak-charger spells, outages) and one "Session summary" notification at the end gives duration, reason, battery start→end and whether everything was restored; a report left by a session Awake did not see end is summarised at the next launch. Agents and unpushed repos join the summary in phase 2.
+- `status.json` in Application Support on every change, served on `http://127.0.0.1:<port>/status.json` when a port is set (loopback only, off by default).
 
 ### 3.3 Phase 2: the Mac knows the agents (weeks 5–8)
 
