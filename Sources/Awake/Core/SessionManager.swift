@@ -1561,7 +1561,7 @@ final class SessionManager {
         try? store.removeReport()
     }
 
-    static func reasonText(_ raw: String) -> String {
+    nonisolated static func reasonText(_ raw: String) -> String {
         switch EndReason(rawValue: raw) {
         case .timer: "time was up"
         case .user: "ended by you"
