@@ -273,6 +273,10 @@ struct SettingsView: View {
         }
     }
 
+    private var statusPort: Binding<Int> {
+        Binding(get: { manager.config.statusPort }, set: { v in update { $0.statusPort = min(max(0, v), 65535) } })
+    }
+
     private var freeDiskFloor: Binding<Int> {
         Binding(get: { manager.config.freeDiskFloorGB }, set: { v in update { $0.freeDiskFloorGB = max(0, v) } })
     }
@@ -535,6 +539,12 @@ struct SettingsView: View {
                 Text(notice).font(.caption).foregroundStyle(.orange)
             }
             Toggle("Post a summary when a session ends", isOn: bind(\.sessionSummary))
+            Stepper(value: statusPort, in: 0...65535, step: 1) {
+                LabeledContent("Local status endpoint port", value: manager.config.statusPort == 0 ? "off" : "\(manager.config.statusPort)")
+            }
+            Text("The menu's status is always written to Application Support/Awake/status.json. With a port set it is also served on http://127.0.0.1:<port>/status.json (this Mac only) for Raycast or SketchyBar; takes effect at the next session start.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
             Text("Tokens are kept in the login keychain, never in config.json. A topic on ntfy.sh is public to anyone who guesses its name: use a long random one, or a reserved topic with an access token.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

@@ -103,6 +103,9 @@ struct Config: Codable, Equatable, Sendable {
     /// Post one summary notification when a session ends (duration,
     /// battery, lid closes, outages, what was restored).
     var sessionSummary: Bool = true
+    /// Serve status.json on http://127.0.0.1:<port>/status.json for
+    /// dashboards. 0 turns the endpoint off; the file is always written.
+    var statusPort: Int = 0
     /// Seconds of outage after which tmux panes are nudged.
     var nudgeThreshold: TimeInterval = 90
     /// tmux targets as `session:window.pane`. Only a pane carrying the
@@ -217,6 +220,7 @@ struct Config: Codable, Equatable, Sendable {
         ntfyTopic = try c.decodeIfPresent(String.self, forKey: .ntfyTopic) ?? d.ntfyTopic
         pushoverEnabled = try c.decodeIfPresent(Bool.self, forKey: .pushoverEnabled) ?? d.pushoverEnabled
         sessionSummary = try c.decodeIfPresent(Bool.self, forKey: .sessionSummary) ?? d.sessionSummary
+        statusPort = try c.decodeIfPresent(Int.self, forKey: .statusPort) ?? d.statusPort
         hotspotSSID = try c.decodeIfPresent(String.self, forKey: .hotspotSSID) ?? d.hotspotSSID
         nudgeThreshold = try c.decodeIfPresent(TimeInterval.self, forKey: .nudgeThreshold) ?? d.nudgeThreshold
         tmuxTargets = try c.decodeIfPresent([String].self, forKey: .tmuxTargets) ?? d.tmuxTargets

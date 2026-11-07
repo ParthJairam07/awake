@@ -70,6 +70,9 @@ final class AppServices {
     private let locker: any ScreenLocking
     private var resources: ResourceMonitor?
     private let freeDisk: ResourceMonitor.DiskReader
+    /// status.json and the loopback endpoint (phase 1).
+    let statusServer = StatusServer()
+    private let store: Store
     /// The file trigger behind scripts/simulate-lid.sh. Compiled into debug
     /// builds and AWAKE_LID_SIMULATION release builds only
     /// (`LidSimulationBuild`); nil in every other build, and only started
@@ -134,6 +137,7 @@ final class AppServices {
         self.displays = DisplayObserver(reader: externalDisplay)
         self.locker = locker
         self.freeDisk = freeDisk
+        self.store = Store(paths: paths)
         self.lidSimulation = lidSimulation
         self.lidSimulationEnabled = lidSimulationEnabled
         self.sampler = BrightnessSampler(display: display, keyboard: keyboard, idleSeconds: idleSeconds)
@@ -197,6 +201,8 @@ final class AppServices {
         let res = ResourceMonitor(notifier: notifier, diskReader: freeDisk) { [weak manager] in manager?.config ?? Config() }
         res.start()
         resources = res
+        statusServer.start(port: manager.config.statusPort)
+        writeStatus()
 
         let net = NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { [weak manager] in
             manager?.config ?? Config()
@@ -233,6 +239,7 @@ final class AppServices {
         power.onChange = nil
         resources?.stop()
         resources = nil
+        statusServer.stop()
         sampleTimer?.cancel()
         sampleTimer = nil
         postOpenSampleTask?.cancel()
@@ -250,6 +257,41 @@ final class AppServices {
         lidActions = nil
         floors = nil
         syncState()
+    }
+
+    /// The current status as one snapshot.
+    func snapshot(now: Date = Date()) -> StatusSnapshot {
+        let session = manager?.session
+        return StatusSnapshot(
+            updatedAt: now,
+            active: manager?.isActive ?? false,
+            startedAt: session?.startedAt,
+            endsAt: session?.endsAt,
+            remainingSeconds: session.map { max(0, Int($0.endsAt.timeIntervalSince(now))) },
+            lidClosed: status.lidClosed,
+            lidOnDesk: status.lidOnDesk,
+            batteryPercent: status.batteryPercent,
+            isCharging: status.isCharging,
+            chargerDraining: status.chargerDraining,
+            thermalState: PowerMonitor.name(status.thermalState),
+            lowPowerSetByUs: manager?.state.lowPowerSetByUs ?? false,
+            wifiSSID: status.wifiSSID,
+            lastOutageSeconds: status.lastGap.map { Int($0) },
+            frozenCount: status.frozenCount,
+            dockerPaused: status.dockerPaused
+        )
+    }
+
+    /// Write status.json and hand the same bytes to the endpoint. Called on
+    /// every status change; cheap, atomic, owner-only like the journal.
+    func writeStatus() {
+        do {
+            let snap = snapshot()
+            statusServer.update(try StatusSnapshot.encode(snap))
+            try store.write(snap, to: paths.statusFile)
+        } catch {
+            Log.error("status.json could not be written: \(error.localizedDescription)")
+        }
     }
 
     /// One-shot launch diagnostics. This does not start any observer or retry
@@ -533,12 +575,14 @@ final class AppServices {
         status.isCharging = power.isCharging
         status.chargerDraining = power.chargerDraining
         status.thermalState = power.thermalState
+        writeStatus()
     }
 
     private func syncState() {
         let s = manager?.effectiveState ?? .clean
         status.frozenCount = s.frozenPids.count
         status.dockerPaused = s.dockerFrozen
+        writeStatus()
     }
 
     private func refreshBrowsers() async {
