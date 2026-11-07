@@ -92,6 +92,14 @@ struct Config: Codable, Equatable, Sendable {
     /// than trusting "Wi-Fi connected": a portal or dead DNS then counts
     /// as an outage, and a recovery is only reported once the page loads.
     var internetProbe: Bool = true
+
+    // Phone alerts (phase 1)
+    /// ntfy server and topic; an empty topic turns ntfy off. The optional
+    /// access token lives in the keychain (`PhoneSecrets`).
+    var ntfyServer: String = PhonePush.defaultNtfyServer
+    var ntfyTopic: String = ""
+    /// Pushover; the app token and user key live in the keychain.
+    var pushoverEnabled: Bool = false
     /// Seconds of outage after which tmux panes are nudged.
     var nudgeThreshold: TimeInterval = 90
     /// tmux targets as `session:window.pane`. Only a pane carrying the
@@ -202,6 +210,9 @@ struct Config: Codable, Equatable, Sendable {
         resourceAlerts = try c.decodeIfPresent(Bool.self, forKey: .resourceAlerts) ?? d.resourceAlerts
         freeDiskFloorGB = try c.decodeIfPresent(Int.self, forKey: .freeDiskFloorGB) ?? d.freeDiskFloorGB
         internetProbe = try c.decodeIfPresent(Bool.self, forKey: .internetProbe) ?? d.internetProbe
+        ntfyServer = try c.decodeIfPresent(String.self, forKey: .ntfyServer) ?? d.ntfyServer
+        ntfyTopic = try c.decodeIfPresent(String.self, forKey: .ntfyTopic) ?? d.ntfyTopic
+        pushoverEnabled = try c.decodeIfPresent(Bool.self, forKey: .pushoverEnabled) ?? d.pushoverEnabled
         hotspotSSID = try c.decodeIfPresent(String.self, forKey: .hotspotSSID) ?? d.hotspotSSID
         nudgeThreshold = try c.decodeIfPresent(TimeInterval.self, forKey: .nudgeThreshold) ?? d.nudgeThreshold
         tmuxTargets = try c.decodeIfPresent([String].self, forKey: .tmuxTargets) ?? d.tmuxTargets

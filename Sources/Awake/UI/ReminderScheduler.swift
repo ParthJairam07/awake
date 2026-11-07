@@ -1,21 +1,20 @@
 import Foundation
-import UserNotifications
 
-/// One `Timer` at endsAt − 5 min that posts the "5 minutes left" reminder.
-/// Rescheduled on extend, cancelled on end. Running unbundled (`swift run`)
-/// there is no notification center to talk to; the reminder is logged.
+/// One `Timer` at endsAt − 10 min that posts the "10 minutes left"
+/// reminder through the app's notifier, so it reaches the Mac and, with
+/// phone alerts configured, the phone. Rescheduled on extend, cancelled on
+/// end.
 @MainActor
 final class ReminderScheduler {
-    static let lead: TimeInterval = 5 * 60
+    static let lead: TimeInterval = 10 * 60
+    static let title = "10 minutes left"
 
+    private let notifier: any Notifying
     private var timer: Timer?
     private(set) var scheduledFor: Date?
-    private var authorizationRequested = false
 
-    /// Bundled apps only: `UNUserNotificationCenter.current()` traps when
-    /// there is no bundle proxy for the process.
-    static var canNotify: Bool {
-        Bundle.main.bundleIdentifier != nil && Bundle.main.bundleURL.pathExtension == "app"
+    init(notifier: any Notifying) {
+        self.notifier = notifier
     }
 
     /// Keep the timer in step with the session deadline.
@@ -28,7 +27,7 @@ final class ReminderScheduler {
         if scheduledFor == fireAt { return }
         timer?.invalidate()
         guard fireAt > Date() else {
-            // Less than five minutes to go: nothing to remind about.
+            // Less than ten minutes to go: nothing to remind about.
             scheduledFor = nil
             timer = nil
             return
@@ -40,7 +39,6 @@ final class ReminderScheduler {
         RunLoop.main.add(t, forMode: .common)
         timer = t
         scheduledFor = fireAt
-        requestAuthorizationIfNeeded()
     }
 
     func cancel() {
@@ -49,36 +47,15 @@ final class ReminderScheduler {
         scheduledFor = nil
     }
 
-    private func fire(endsAt: Date) {
-        scheduledFor = nil
-        timer = nil
-        let body = "Sleep is restored at \(endsAt.formatted(date: .omitted, time: .shortened)). Extend from the menu bar."
-        Log.info("reminder: 5 minutes left")
-        guard Self.canNotify else {
-            Log.info("reminder not posted: not running from an app bundle")
-            return
-        }
-        let content = UNMutableNotificationContent()
-        content.title = "5 minutes left"
-        content.body = body
-        content.sound = .default
-        let request = UNNotificationRequest(identifier: "awake.reminder", content: content, trigger: nil)
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error {
-                Log.error("reminder notification failed: \(error.localizedDescription)")
-            }
-        }
+    static func body(endsAt: Date) -> String {
+        "Sleep is restored at \(endsAt.formatted(date: .omitted, time: .shortened)). Extend from the menu bar."
     }
 
-    private func requestAuthorizationIfNeeded() {
-        guard !authorizationRequested, Self.canNotify else { return }
-        authorizationRequested = true
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error {
-                Log.error("notification authorization failed: \(error.localizedDescription)")
-            } else if !granted {
-                Log.info("notifications not granted")
-            }
-        }
+    /// What the timer calls; internal so a test can fire it.
+    func fire(endsAt: Date) {
+        scheduledFor = nil
+        timer = nil
+        Log.info("reminder: 10 minutes left")
+        notifier.post(title: Self.title, body: Self.body(endsAt: endsAt))
     }
 }

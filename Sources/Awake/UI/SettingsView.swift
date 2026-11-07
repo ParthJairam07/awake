@@ -6,6 +6,7 @@ import SwiftUI
 struct SettingsView: View {
     let manager: SessionManager
     let secrets: any HotspotSecretStore
+    let phoneSecrets: any PhoneSecretStore
     let locationPermission: LocationPermission
     /// Launch at login as macOS reports it, not as config.json remembers it.
     let loginItem: LoginItem
@@ -20,6 +21,7 @@ struct SettingsView: View {
     /// The password field, saving, what was saved, and the notice under
     /// the field.
     @State private var hotspot = HotspotPasswordField()
+    @State private var phone = PhoneSettingsModel()
     /// Names of the apps the automatic lid-close scope would freeze right
     /// now (the freeze list excluded); refreshed on appear and toggle.
     @State private var wouldFreeze: [String] = []
@@ -31,6 +33,7 @@ struct SettingsView: View {
             agentSection
             powerSection
             networkSection
+            phoneSection
             appSection
         }
         .formStyle(.grouped)
@@ -504,6 +507,40 @@ struct SettingsView: View {
         guard !t.isEmpty else { return }
         update { if !$0.tmuxTargets.contains(t) { $0.tmuxTargets.append(t) } }
         newTmuxTarget = ""
+    }
+
+    private var phoneSection: some View {
+        Section {
+            Text("Every notification Awake posts on the Mac is also sent to your phone through these services. Install the ntfy or Pushover app on the phone and subscribe; nothing passes through a server of Awake's own.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            TextField("ntfy topic (empty = off)", text: bind(\.ntfyTopic))
+            TextField("ntfy server", text: bind(\.ntfyServer))
+            HStack {
+                SecureField("ntfy access token (\(PhoneSettingsModel.onFileLabel(phone.onFile.ntfyToken)))", text: $phone.ntfyToken)
+            }
+            Toggle("Pushover", isOn: bind(\.pushoverEnabled))
+            SecureField("Pushover app token (\(PhoneSettingsModel.onFileLabel(phone.onFile.pushoverAppToken)))", text: $phone.pushoverAppToken)
+            SecureField("Pushover user key (\(PhoneSettingsModel.onFileLabel(phone.onFile.pushoverUserKey)))", text: $phone.pushoverUserKey)
+            HStack {
+                Button("Save tokens to keychain") { Task { await phone.save(to: phoneSecrets) } }
+                    .disabled(phone.busy || (phone.ntfyToken.isEmpty && phone.pushoverAppToken.isEmpty && phone.pushoverUserKey.isEmpty))
+                Button("Remove tokens") { Task { await phone.clear(in: phoneSecrets) } }
+                    .disabled(phone.busy || phone.onFile == .none)
+                Spacer()
+                Button("Send test alert") { Task { await phone.test(with: manager.phoneAlerts) } }
+                    .disabled(phone.busy || (manager.config.ntfyTopic.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !manager.config.pushoverEnabled))
+            }
+            if let notice = phone.notice {
+                Text(notice).font(.caption).foregroundStyle(.orange)
+            }
+            Text("Tokens are kept in the login keychain, never in config.json. A topic on ntfy.sh is public to anyone who guesses its name: use a long random one, or a reserved topic with an access token.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Phone alerts")
+        }
+        .task { await phone.load(from: phoneSecrets) }
     }
 
     private var appSection: some View {

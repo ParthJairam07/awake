@@ -375,7 +375,7 @@ final class SessionManager {
     private let display: any DisplayDimming
     private let keyboard: any KeyboardBacklighting
     private let appNap: any AppNapPreferencing
-    private let notifier: any Notifying
+    let notifier: any Notifying
     private let clamshell: @Sendable () -> Bool?
     private let clock: @Sendable () -> Date
     /// What the process table says a pid is now. Read only, to tell whether
@@ -631,7 +631,9 @@ final class SessionManager {
 
     /// Production wiring.
     static func live(paths: Paths = .fromEnvironment()) -> SessionManager {
-        let notifier = Notifier()
+        // Every notification goes to the Mac and, once a topic or Pushover
+        // is configured, to the phone (phase 1).
+        let notifier = PhoneAlerts(local: Notifier(), secrets: { await KeychainPhoneSecrets.read() })
         let audio = CoreAudioControl()
         let display = DisplayServicesDimmer()
         let keyboard = CoreBrightnessKeyboardBacklight()
@@ -656,9 +658,14 @@ final class SessionManager {
             keyboard: keyboard
         )
         m.services = services
+        notifier.configProvider = { [weak m] in m?.config ?? Config() }
         services.logStartupSnapshot()
         return m
     }
+
+    /// The phone forwarder when this is the production wiring; Settings
+    /// uses it for the test button.
+    var phoneAlerts: PhoneAlerts? { notifier as? PhoneAlerts }
 
     // MARK: Lifecycle queue
 

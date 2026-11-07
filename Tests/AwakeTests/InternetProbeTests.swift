@@ -137,3 +137,61 @@ final class NetworkFailoverProbeTests: XCTestCase {
         XCTAssertEqual(n.lastGap, 10)
     }
 }
+
+@MainActor
+final class OutageNoticeTests: XCTestCase {
+    private var home: TempHome!
+    override func setUp() async throws { home = TempHome() }
+    override func tearDown() async throws { home.destroy() }
+
+    private func make(notifier: RecordingNotifier, config: Config, clock: FakeClock) -> NetworkFailover {
+        NetworkFailover(paths: home.paths, keychain: FakeKeychainStore(), nudge: TmuxNudge { _, _ in true }, notifier: notifier, clock: { clock.now }, probe: nil) { config }
+    }
+
+    /// "Internet down" is posted when the notice timer fires during an
+    /// outage, once, and a short recovery after it is closed on the phone.
+    func testOutageIsAnnouncedOnceAndClosedOnRecovery() async {
+        let clock = FakeClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let notifier = RecordingNotifier()
+        var config = Config()
+        config.hotspotSSID = "iPhone"
+        let n = make(notifier: notifier, config: config, clock: clock)
+        await n.simulate(satisfied: false)
+        clock.advance(90)
+        n.fireOutageNotice()
+        n.fireOutageNotice()
+        XCTAssertEqual(notifier.posts.map(\.title), ["Internet down"])
+        XCTAssertTrue(notifier.posts[0].body.contains("1m 30s"), notifier.posts[0].body)
+        XCTAssertTrue(notifier.posts[0].body.contains("iPhone"), notifier.posts[0].body)
+        XCTAssertTrue(n.outageAnnounced)
+
+        // Recovery below the nudge threshold would otherwise be silent.
+        config.nudgeThreshold = 3600
+        await n.simulate(satisfied: true)
+        XCTAssertEqual(notifier.posts.map(\.title), ["Internet down", "Internet back"])
+        XCTAssertFalse(n.outageAnnounced)
+    }
+
+    func testNoticeOutsideAnOutageOrAfterRecoveryPostsNothing() async {
+        let clock = FakeClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let notifier = RecordingNotifier()
+        let n = make(notifier: notifier, config: Config(), clock: clock)
+        n.fireOutageNotice()
+        await n.simulate(satisfied: false)
+        clock.advance(10)
+        await n.simulate(satisfied: true)
+        n.fireOutageNotice()
+        XCTAssertEqual(notifier.posts.count, 0)
+    }
+
+    func testStopForgetsTheNotice() async {
+        let clock = FakeClock(Date(timeIntervalSince1970: 1_800_000_000))
+        let notifier = RecordingNotifier()
+        let n = make(notifier: notifier, config: Config(), clock: clock)
+        await n.simulate(satisfied: false)
+        n.fireOutageNotice()
+        XCTAssertTrue(n.outageAnnounced)
+        n.stop()
+        XCTAssertFalse(n.outageAnnounced)
+    }
+}

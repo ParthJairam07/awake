@@ -791,6 +791,11 @@ final class NetworkFailover {
     /// the path itself is up, since a down path is already an outage.
     private(set) var lastPathSatisfied = true
     private var probeLoop: Task<Void, Never>?
+    /// Phase 1: "Internet down" is posted once an outage has lasted
+    /// `nudgeThreshold` (the same bar as the recovery notice), so a blip
+    /// is not an alert on the phone and a real outage is.
+    private var outageNotice: Timer?
+    private(set) var outageAnnounced = false
 
     private var monitor: NWPathMonitor?
     private(set) var retryTimer: Timer?
@@ -863,6 +868,7 @@ final class NetworkFailover {
         probeLoop = nil
         reachability = ReachabilityTracker()
         lastPathSatisfied = true
+        cancelOutageNotice()
         cancelTimer()
         for task in inflight.values { task.cancel() }
         inflight.removeAll()
@@ -996,8 +1002,42 @@ final class NetworkFailover {
         let now = clock()
         let outputs = satisfied ? machine.pathSatisfied(at: now) : machine.pathUnsatisfied(at: now)
         if outputs.isEmpty { return }
-        if !satisfied { Log.info("\(source) unsatisfied") }
+        if !satisfied {
+            Log.info("\(source) unsatisfied")
+            scheduleOutageNotice(source: source)
+        }
         await apply(outputs)
+    }
+
+    private func scheduleOutageNotice(source: String) {
+        cancelOutageNotice()
+        let delay = configProvider().nudgeThreshold
+        let t = Timer(timeInterval: delay, repeats: false) { [weak self] _ in
+            Task { @MainActor in self?.fireOutageNotice(source: source) }
+        }
+        RunLoop.main.add(t, forMode: .common)
+        outageNotice = t
+    }
+
+    private func cancelOutageNotice() {
+        outageNotice?.invalidate()
+        outageNotice = nil
+        outageAnnounced = false
+    }
+
+    /// What the notice timer calls; internal so tests can fire it.
+    func fireOutageNotice(source: String = "wifi path") {
+        outageNotice = nil
+        guard let start = machine.outageStart, !outageAnnounced else { return }
+        outageAnnounced = true
+        let config = configProvider()
+        let sofar = FailoverMachine.humanGap(clock().timeIntervalSince(start))
+        let cause = source == "wifi path" ? "Wi-Fi has had no connection" : "Wi-Fi is connected but the internet does not answer"
+        let hotspot = HotspotSSID.normalized(config.hotspotSSID)
+        let plan = hotspot.isEmpty
+            ? "No hotspot is configured; Awake keeps watching."
+            : "Awake keeps trying to join \(hotspot) (\(machine.joins) attempt\(machine.joins == 1 ? "" : "s") so far)."
+        notifier.post(title: "Internet down", body: "\(cause) for \(sofar). \(plan)")
     }
 
     /// What the retry timer calls. Internal so tests can exercise the
@@ -1035,8 +1075,10 @@ final class NetworkFailover {
             case let .recovered(start, gap):
                 self.outage += 1
                 cancelTimer()
+                let announced = outageAnnounced
+                cancelOutageNotice()
                 notifiedThisOutage = []
-                await recovered(start: start, gap: gap)
+                await recovered(start: start, gap: gap, announced: announced)
             }
         }
     }
@@ -1135,7 +1177,7 @@ final class NetworkFailover {
         notifier.post(title: "Hotspot not joined", body: problem.explanation)
     }
 
-    private func recovered(start: Date, gap: TimeInterval) async {
+    private func recovered(start: Date, gap: TimeInterval, announced: Bool = false) async {
         let epoch = self.epoch
         let end = clock()
         lastGap = gap
@@ -1143,6 +1185,11 @@ final class NetworkFailover {
         appendHandoff(line)
         Log.info("wifi path satisfied after \(FailoverMachine.humanGap(gap))")
         let config = configProvider()
+        // An outage announced on the phone is closed there too, whatever
+        // the nudge below reports.
+        if announced, gap < config.nudgeThreshold {
+            notifier.post(title: "Internet back", body: "Back after \(FailoverMachine.humanGap(gap)).")
+        }
         if gap >= config.nudgeThreshold {
             // Each pane is only nudged while this session is still the live one.
             let count = await nudge.nudge(targets: config.tmuxTargets, pressEnter: config.tmuxNudgePressesEnter) { [weak self] in self?.epoch == epoch }

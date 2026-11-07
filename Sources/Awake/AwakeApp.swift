@@ -21,6 +21,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let manager: SessionManager
     let status: any StatusSource
     let secrets: any HotspotSecretStore
+    let phoneSecrets: any PhoneSecretStore = KeychainPhoneSecretStore()
     let locationPermission: LocationPermission
     let loginItem = LoginItem()
     let releases = ReleaseChecker()
@@ -71,11 +72,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.error("could not save config after the launch at login check: \(error.localizedDescription)")
             }
         }
-        let settings = SettingsWindow { [manager, secrets, locationPermission, loginItem, releases] in
+        let settings = SettingsWindow { [manager, secrets, phoneSecrets, locationPermission, loginItem, releases] in
             AnyView(
                 SettingsView(
                     manager: manager,
                     secrets: secrets,
+                    phoneSecrets: phoneSecrets,
                     locationPermission: locationPermission,
                     loginItem: loginItem,
                     releases: releases

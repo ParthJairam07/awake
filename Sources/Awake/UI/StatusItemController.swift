@@ -19,7 +19,7 @@ final class StatusItemController: NSObject {
     let manager: SessionManager
     let status: any StatusSource
     let model = MenuBarModel()
-    let reminder = ReminderScheduler()
+    let reminder: ReminderScheduler
     /// Opens the settings window. Injected because the window is owned by the
     /// app delegate, which outlives any one status item.
     private let showSettings: () -> Void
@@ -73,6 +73,7 @@ final class StatusItemController: NSObject {
         clock: @escaping @Sendable () -> Date = { Date() }
     ) {
         self.manager = manager
+        reminder = ReminderScheduler(notifier: manager.notifier)
         self.status = status
         self.showSettings = showSettings
         self.makeWidthWriter = makeWidthWriter

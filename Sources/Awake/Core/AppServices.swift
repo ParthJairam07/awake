@@ -159,7 +159,7 @@ final class AppServices {
             locationPermission.requestWhenInUse()
         }
 
-        (notifier as? Notifier)?.requestAuthorizationIfNeeded()
+        (((notifier as? PhoneAlerts)?.local ?? notifier) as? Notifier)?.requestAuthorizationIfNeeded()
 
         lidActions = LidActions(manager: manager, freezer: freezer, docker: docker, audio: audio, display: display, keyboard: keyboard, sampler: sampler, locker: locker, notifier: notifier)
         floors = FloorRuleDriver(manager: manager, notifier: notifier)
