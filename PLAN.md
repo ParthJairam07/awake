@@ -31,14 +31,18 @@ Insomnia (krishhgg/Insomnia, MIT) already solves the "keep awake and restore" pr
 
 ### 3.1 Phase 0: fix the gaps that bite today (weeks 1–2)
 
-| Item | Why | Source of truth |
+**Done** (all six, each with a setting, defaults on, and unit tests over fakes):
+
+| Item | Why | How it is done |
 |---|---|---|
-| Battery floors use the **trend** (percent per minute, watts) as well as the charger flag | A weak charger counts as "charging" today, so a plugged-in Mac can drain to 0% | `AppleSmartBattery`: `InstantAmperage`, `Voltage`, `AdapterDetails.Watts` |
-| **Lock the screen on lid close** (default on) | An unattended Mac with sleep disabled may stay unlocked | session lock API |
-| **External monitor = not a "closed lid"** | Lid actions run today even in clamshell desk mode | `CGGetActiveDisplayList`, `CGDisplayIsBuiltin` |
-| **Real internet check** before calling it an outage | Captive portals and dead DNS look "connected" | HTTPS HEAD to the agent APIs; `captive.apple.com` probe |
-| **Battery temperature and thermal throttle %** in the floor rules | Bag detection before macOS says "critical" | `AppleSmartBattery.Temperature`, `pmset -g therm` |
-| **Memory pressure and free disk** alerts | Many agents plus Docker fill both overnight | memory-pressure dispatch source, volume capacity |
+| Battery floors use the **trend** as well as the charger flag | A weak charger counts as "charging", so a plugged-in Mac can drain to 0% | `ChargerTrend`: on AC, two points below the high seen on this charger, or two discharging `InstantAmperage × Voltage` reads in a row, means "draining"; the floors then treat the Mac as on battery; one "Charger too weak" notice per spell |
+| **Lock the screen on lid close** (default on) | An unattended Mac with sleep disabled stays unlocked | `ScreenLock`: `SACLockScreenImmediate` (login.framework), first lid action, not journaled; failure logged and announced once per session |
+| **External monitor = not a "closed lid"** | Lid actions ran even in clamshell desk mode | `LidPolicy` + `DisplayObserver`: a non-built-in display online makes the close "desk": no actions, no lid Low Power Mode; unplugging it with the lid closed runs them, plugging one in undoes them |
+| **Real internet check** before calling it an outage | Captive portals and dead DNS look "connected" | `CaptivePortalProbe`: `captive.apple.com/hotspot-detect.html` every 60 s while Wi-Fi is up; two failures open an outage like a lost path; a path recovery behind a portal is not a recovery |
+| **Battery temperature and thermal throttle %** in the floor rules | Bag detection before macOS says "critical" | `ThermalProbe`: `pmset -g therm` CPU speed limit ≤ 50% or battery ≥ 45 °C → Low Power Mode; ≥ 55 °C ends the session. Many Apple Silicon Macs (the author's Air among them) report no battery temperature; then only the speed limit and thermal state apply |
+| **Memory pressure and free disk** alerts | Many agents plus Docker fill both overnight | `ResourceMonitor`: critical memory pressure (dispatch source) and free space on the home volume under 10 GB, one notice per crossing |
+
+Still to do for phase 0: the real-Mac checklist of section 7 (lid close with and without a monitor, a weak charger, a captive portal) recorded in `docs/release-validation.md`.
 
 ### 3.2 Phase 1: the phone gets the alerts (weeks 3–4)
 

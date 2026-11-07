@@ -27,8 +27,8 @@ The first list is the goal; the items marked *(today)* work now, the rest are pl
 - On lid close: darkens the screen, mutes audio, freezes chat apps, turns on Low Power Mode, and undoes all of it on lid open. Battery and heat floors end the session before the Mac gets into trouble. *(today)*
 - Knows each agent: alive, busy, idle, stalled, or waiting for input.
 - Detects pop-ups and prompts that block agents (Gatekeeper, permission dialogs, "proceed? (y/n)", 2FA) and reports their text.
-- Watches battery trend and charger wattage, battery temperature, thermal throttling, memory pressure, free disk, and real internet reachability (not just "Wi-Fi connected").
-- Locks the screen on lid close. Leaves you alone when an external monitor is attached.
+- Watches the battery trend (a charger too weak for the load counts as no charger), battery temperature where the Mac reports one, CPU throttling, memory pressure, free disk, and real internet reachability (not just "Wi-Fi connected"). *(today)*
+- Locks the screen on lid close. Leaves you alone when an external monitor is attached. *(today)*
 - Lets agents ask for awake time themselves: a **lease** per task, released when done. The Mac stays awake while any lease is held, capped by a limit you set.
 
 **On the phone**
@@ -145,6 +145,9 @@ watch, and read `~/Library/Logs/Awake/awake.log` afterward.
 During a session, closing the lid does each of these, and opening it tries
 to undo them. The timer keeps counting down while the lid is closed.
 
+- **The screen locks.** With sleep turned off the Mac never reaches the lock
+  macOS applies on wake, so Awake locks it itself, first, before anything
+  else. If the lock fails you are told once per session.
 - **Display and keyboard light go off.** Awake saves their brightness
   first. With sleep turned off, macOS no longer does this by itself.
 - **Apps on the freeze list are frozen.** Freezing sends an app's processes
@@ -158,6 +161,11 @@ to undo them. The timer keeps counting down while the lid is closed.
   battery or heat rule still needs it.
 - **Docker Desktop is frozen when no container runs.** This one is off by
   default.
+
+**With an external display connected, none of this happens.** A lid closed
+on a desk is not a departure: Awake leaves the screen, audio, apps and Low
+Power Mode alone and the menu reads "Lid: closed, external display". If the
+display is unplugged while the lid stays closed, the actions run then.
 
 On Mac laptops with Apple silicon or a T2 chip, closing the lid disconnects
 the built-in microphone in hardware. Recording a meeting with the lid closed
