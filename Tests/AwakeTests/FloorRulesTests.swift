@@ -360,8 +360,8 @@ final class FloorRuleDriverTests: XCTestCase {
         XCTAssertFalse(m.isActive)
         XCTAssertNil(try h.store.loadSession())
         XCTAssertEqual(h.guardFake.calls.last, "disablesleep 0")
-        XCTAssertEqual(h.notifier.posts.last?.title, "Session ended")
-        XCTAssertTrue(h.notifier.posts.last?.body.contains("10%") ?? false)
+        XCTAssertEqual(h.notifier.posts.last { $0.title != SessionReport.title }?.title, "Session ended")
+        XCTAssertTrue(h.notifier.posts.last { $0.title != SessionReport.title }?.body.contains("10%") ?? false)
     }
 
     func testUnreadableBatteryEndsSessionAndSaysWhy() async throws {
@@ -376,8 +376,8 @@ final class FloorRuleDriverTests: XCTestCase {
         XCTAssertFalse(m.isActive)
         XCTAssertNil(try h.store.loadSession())
         XCTAssertEqual(h.guardFake.calls.last, "disablesleep 0")
-        XCTAssertEqual(h.notifier.posts.last?.title, "Session ended")
-        let body = try XCTUnwrap(h.notifier.posts.last?.body)
+        XCTAssertEqual(h.notifier.posts.last { $0.title != SessionReport.title }?.title, "Session ended")
+        let body = try XCTUnwrap(h.notifier.posts.last { $0.title != SessionReport.title }?.body)
         XCTAssertTrue(body.contains("could not be read"), body)
         XCTAssertTrue(body.contains("10%"), body)
     }

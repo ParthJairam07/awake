@@ -268,7 +268,7 @@ final class RecoverySafetyTests: XCTestCase {
         XCTAssertTrue(h.guardFake.sleepDisabled)
         XCTAssertEqual(try h.store.loadState()?.sleepDisabledByUs, true)
         XCTAssertFalse(h.notifier.posts.contains { $0.body.contains("back to normal") }, "\(h.notifier.posts)")
-        let last = try XCTUnwrap(h.notifier.posts.last)
+        let last = try XCTUnwrap(h.notifier.posts.last { $0.title != SessionReport.title })
         XCTAssertEqual(last.title, SessionManager.incompleteTitle)
         XCTAssertTrue(last.body.contains("could not restore sleep"), last.body)
         XCTAssertNotNil(m.lastError)
@@ -495,7 +495,7 @@ final class RecoverySafetyTests: XCTestCase {
         XCTAssertFalse(h.guardFake.sleepDisabled)
         XCTAssertEqual(try h.store.loadState(), RuntimeState.clean)
         XCTAssertNil(try h.store.loadSession())
-        XCTAssertEqual(h.notifier.posts.last?.title, "Session ended")
+        XCTAssertEqual(h.notifier.posts.last { $0.title != SessionReport.title }?.title, "Session ended")
     }
 
     /// While an end is pending, a new session would be ended by the retry;

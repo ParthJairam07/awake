@@ -92,7 +92,7 @@ final class StillRunningCommandTests: XCTestCase {
         XCTAssertNil(m.unfinishedCommand)
         XCTAssertFalse(try lockIsHeld(), "recovery lock still held after the command exited")
         XCTAssertNil(try h.store.loadSession())
-        XCTAssertEqual(h.notifier.posts.last?.title, "Session restored")
+        XCTAssertEqual(h.notifier.posts.last { $0.title != SessionReport.title }?.title, "Session restored")
     }
 
     /// The same live `disablesleep 0` exits 1: nothing is confirmed, and the
@@ -151,7 +151,7 @@ final class StillRunningCommandTests: XCTestCase {
         XCTAssertFalse(h.guardFake.lowPowerOn)
         XCTAssertNil(m.unfinishedCommand)
         XCTAssertFalse(try lockIsHeld())
-        XCTAssertEqual(h.notifier.posts.last?.title, "Session restored")
+        XCTAssertEqual(h.notifier.posts.last { $0.title != SessionReport.title }?.title, "Session restored")
         XCTAssertEqual(h.guardFake.unlockedPrivilegedCalls, [])
     }
 

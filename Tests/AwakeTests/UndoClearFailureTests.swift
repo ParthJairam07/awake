@@ -40,7 +40,7 @@ final class UndoClearFailureTests: XCTestCase {
         XCTAssertFalse(h.guardFake.sleepDisabled)
         XCTAssertEqual(try h.store.loadState()?.sleepDisabledByUs, true, "the entry went with the failed write")
         try assertShown(m, "sleep restored")
-        let notice = try XCTUnwrap(h.notifier.posts.last)
+        let notice = try XCTUnwrap(h.notifier.posts.last { $0.title != SessionReport.title })
         XCTAssertTrue(notice.body.hasPrefix("sleep restored but the journal entry could not be cleared"), notice.body)
 
         let again = await m.end(reason: .user)

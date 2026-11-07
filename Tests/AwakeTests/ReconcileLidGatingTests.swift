@@ -134,7 +134,7 @@ final class ReconcileLidGatingTests: XCTestCase {
         let m = h.makeManager()
         await m.start(duration: 3600)
         await m.end(reason: .user)
-        XCTAssertEqual(h.notifier.posts.count, 1)
+        XCTAssertEqual(h.notifier.posts.map(\.title), ["Session ended", SessionReport.title])
         XCTAssertEqual(h.notifier.posts[0].title, "Session ended")
         XCTAssertTrue(h.notifier.posts[0].body.contains("Ended by you"))
     }

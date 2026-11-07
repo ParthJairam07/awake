@@ -166,7 +166,7 @@ final class AppNapTests: XCTestCase {
         let err = try XCTUnwrap(m.lastError)
         XCTAssertTrue(err.contains(chrome), err)
         XCTAssertTrue(err.contains("kept in the journal"), err)
-        XCTAssertEqual(h.notifier.posts.last?.title, SessionManager.incompleteTitle)
+        XCTAssertEqual(h.notifier.posts.last { $0.title != SessionReport.title }?.title, SessionManager.incompleteTitle)
 
         h.appNap.failWrites = []
         let again = await m.end(reason: .user)
