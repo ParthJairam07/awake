@@ -15,13 +15,13 @@ struct ScreenLockError: Error, CustomStringConvertible {
 
 /// Records lock requests for tests; `failWith` makes them fail.
 final class RecordingScreenLock: ScreenLocking, @unchecked Sendable {
-    private let lock = NSLock()
+    private let mutex = NSLock()
     private var _calls = 0
     var failWith: String?
-    var calls: Int { lock.withLock { _calls } }
+    var calls: Int { mutex.withLock { _calls } }
 
     func lock() throws {
-        lock.withLock { _calls += 1 }
+        mutex.withLock { _calls += 1 }
         if let failWith { throw ScreenLockError(description: failWith) }
     }
 }
