@@ -1,6 +1,6 @@
 # Awake: plan
 
-This is the plan before any code. It records what we are building, in what order, and the decisions already made. Change it by pull request.
+This is the plan. It records what we are building, in what order, and the decisions already made. Change it by pull request.
 
 The plan builds on three write-ups kept outside this repo for now: a full read of the Insomnia codebase, a critique with feature ideas, and a list of everything a MacBook can report. The useful parts of each are folded in below.
 
@@ -25,7 +25,7 @@ Insomnia (krishhgg/Insomnia, MIT) already solves the "keep awake and restore" pr
 - **Lid actions**: darken, mute, freeze chat apps, optional Docker pause, Low Power Mode, all reversible.
 - **Hotspot handoff** and the opt-in tmux nudge.
 
-Decision to make in phase 0: fork Insomnia and build on it, or start a new Swift app that re-implements the journal model. Leaning: **fork**, because the recovery code is the hard, well-tested part (1,284 tests), and the phone and agent layers are additive.
+**Decided: fork.** Awake is a fork of Insomnia at commit `b8e7e20`, renamed throughout (bundle id `com.parthjairam.awake`, `~/Library/Application Support/Awake`, `com.awake.backstop`, `/etc/sudoers.d/awake`), so it installs beside an existing Insomnia without touching it. The recovery code is the hard, well-tested part, and the phone and agent layers are additive. Insomnia's MIT notice is kept in `THIRD_PARTY_NOTICES`.
 
 ## 3. What we add
 
@@ -76,15 +76,14 @@ Decision to make in phase 0: fork Insomnia and build on it, or start a new Swift
 - **Transport:** push out via ntfy/Pushover; pull and control over Tailscale. No cloud relay of our own in v1.
 - **Safety rules carried over unchanged:** journal before change; clear an entry only after a confirmed undo; never SIGKILL `sudo`; never signal a pid we can't prove is ours; a session never starts unless the recovery agent is armed.
 - **Honesty rule:** every reading is labelled measured, derived or unknown. "Unknown" never counts as "fine".
-- **Licence:** MIT.
+- **Licence:** all rights reserved for Awake's own code (the owner may sell it later), with Insomnia's MIT notice kept for the code it came from. Open-sourcing part of it is a later decision; closed to open is one commit, open to closed is impossible.
 
 ## 5. Open questions
 
-1. Fork Insomnia or start fresh (see §2)? Decide after a week of reading its `SessionManager` and recovery script.
-2. Which agents to support first? Proposal: Claude Code and Codex in tmux, then Cursor and the GUI agents.
-3. How much automation on prompts? Proposal: report by default; remote one-tap answer opt-in per agent; never auto-answer.
-4. Where do secrets live (hotspot password, ntfy token, Tailscale auth)? Proposal: login Keychain, as Insomnia does.
-5. Notarized builds and a Homebrew cask, or ad-hoc signed like Insomnia? Affects install friction a lot.
+1. Which agents to support first? Proposal: Claude Code and Codex in tmux, then Cursor and the GUI agents.
+2. How much automation on prompts? Proposal: report by default; remote one-tap answer opt-in per agent; never auto-answer.
+3. Where do secrets live (hotspot password, ntfy token, Tailscale auth)? Proposal: login Keychain, as Insomnia does.
+4. Notarized builds and a Homebrew cask, or ad-hoc signed like Insomnia? Affects install friction a lot.
 
 ## 6. What we will not do
 
@@ -147,7 +146,7 @@ The App Store sandbox forbids what Awake needs: `sudo pmset`, SIGSTOP on other a
 
 ### Business shape
 
-- Open-source core (MIT, like Insomnia) for trust: the app runs `sudo` and pauses other apps, and people will want to read it.
+- Source stays readable on GitHub for trust (the app runs `sudo` and pauses other apps, and people will want to read it), but under all rights reserved for now. Whether to open-source the Mac core later is decided when there is something to sell.
 - Paid layer: the native phone app and/or the hosted relay. One-time purchase through Lemon Squeezy or Paddle (they handle tax) unless the relay makes a subscription honest.
 
 ### Order of work

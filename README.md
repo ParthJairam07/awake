@@ -6,7 +6,7 @@ Awake is a macOS menu bar app plus a phone companion for people who run many AI 
 
 It keeps a MacBook awake for a set time, keeps the agents fast, and tells you on your phone when something needs you: an agent stuck on a prompt, a dying battery, a laptop getting hot, Wi-Fi that looks connected but isn't.
 
-> Status: planning. No code yet. See [PLAN.md](PLAN.md).
+> Status: early. Awake is a fork of Insomnia, so the keep-awake core below (timer, lid actions, recovery) works today. The agent and phone layers are being built in the order set out in [PLAN.md](PLAN.md). Recovery can fail, and a running timer is not a safety guarantee: use a stable, well-ventilated surface, not a closed bag.
 
 ## Why
 
@@ -20,8 +20,11 @@ Awake starts from those gaps.
 
 ## What Awake does
 
+The first list is the goal; the items marked *(today)* work now, the rest are planned.
+
 **On the Mac**
-- Keeps the Mac awake for a fixed time, never forever, with a recovery journal so everything is undone even after a crash (the Insomnia model).
+- Keeps the Mac awake for a fixed time, never forever, with a recovery journal so everything is undone even after a crash. *(today)*
+- On lid close: darkens the screen, mutes audio, freezes chat apps, turns on Low Power Mode, and undoes all of it on lid open. Battery and heat floors end the session before the Mac gets into trouble. *(today)*
 - Knows each agent: alive, busy, idle, stalled, or waiting for input.
 - Detects pop-ups and prompts that block agents (Gatekeeper, permission dialogs, "proceed? (y/n)", 2FA) and reports their text.
 - Watches battery trend and charger wattage, battery temperature, thermal throttling, memory pressure, free disk, and real internet reachability (not just "Wi-Fi connected").
@@ -48,10 +51,223 @@ Awake starts from those gaps.
 - No remote unlock of the Mac. Apple does not allow it, and we would not want it.
 - No kernel extension, no background daemon that outlives the session.
 
-## Requirements
+## Install
 
-macOS 26 or later on Apple Silicon. A phone with a browser or the companion app. Tailscale (or similar) for the phone-to-Mac connection.
+Requires macOS 26 or later on an Apple Silicon Mac.
+
+There is no Awake release yet. Until the first one, build from source (below). Once releases exist, the coding-agent prompt and the release channels described here apply.
+
+Paste this into your coding agent:
+
+```text
+Install the latest stable Awake release by following https://github.com/ParthJairam07/awake/blob/main/skills/install-awake/SKILL.md. If a step needs my password, give me the command to run in Terminal.
+```
+
+For the newest nightly, write "the newest Awake nightly prerelease" in
+place of "the latest stable Awake release". Nightlies are built from `main`
+on each day it has new commits. They have the newest code and may be broken.
+
+To install a release yourself, follow [docs/install.md](docs/install.md). It
+covers both channels, how to check the download, and `v0.1.0`, which installs
+differently. Settings > App shows the installed version, and "Check for
+updates" there tells you whether a newer release exists without installing
+anything.
+
+### Build from source
+
+Needs Xcode with Swift 6.2 or later. Replace `v<version>` with the latest
+stable tag, or a nightly tag for the newest code:
+
+```bash
+git clone --branch v<version> --depth 1 https://github.com/ParthJairam07/awake.git
+cd awake
+./scripts/install.sh
+open "$HOME/Applications/Awake.app"
+```
+
+<details>
+<summary><strong>What the installer changes on your Mac</strong></summary>
+
+The installer needs your password, because the sudoers rule is a system
+file. It installs:
+
+- The app, at `~/Applications/Awake.app`.
+- A **recovery agent**, a `launchd` job that runs every minute. If the app is
+  gone when a session should have ended, the agent tries to undo the
+  session's changes.
+- A **sudoers rule** at `/etc/sudoers.d/awake`. A sudoers rule decides who
+  can run what with `sudo`. This one lets your user account, not just
+  Awake, run these four commands without a password:
+
+```text
+/usr/bin/pmset -a disablesleep 1
+/usr/bin/pmset -a disablesleep 0
+/usr/bin/pmset -b lowpowermode 1
+/usr/bin/pmset -b lowpowermode 0
+```
+
+Any program running as you can use that rule too, so review it before you
+install. [docs/install.md](docs/install.md#what-gets-installed) lists every
+file and explains how upgrades replace them.
+
+</details>
+
+## Using it
+
+1. **Start.** Click the eye in the menu bar, enter days, hours and minutes,
+   and press Enter.
+2. **Add time.** Click the eye or the countdown during a session.
+3. **End early.** Press and hold the end control next to the countdown.
+4. **Settings and status.** Right-click the eye. Quit asks Awake to undo
+   the session first, and it refuses while a change is still waiting to be
+   undone. Saved audio for an output that isn't connected doesn't hold it up.
+   Awake restores that output if it reconnects while the app runs, or at
+   the next launch.
+
+You don't have to close the lid, and opening it doesn't end the session.
+
+On battery power, Awake turns on Low Power Mode below 40% and ends the
+session below 10%. Those are the defaults. You can change both in Settings,
+and an end floor of 0 turns the battery end off. The heat rules turn on Low Power
+Mode when the Mac gets seriously hot and end the session at critical heat.
+They are on by default, and Settings can turn them off. All of these rules
+only work while the app runs.
+
+Before your first session, check Settings. Then run a short session you can
+watch, and read `~/Library/Logs/Awake/awake.log` afterward.
+
+## What happens when the lid closes
+
+<p align="center">
+  <img src="docs/assets/lid-actions.svg" alt="Illustrated Settings defaults: Slack, WhatsApp, and Discord on the freeze list, Docker's idle rule off, mute on. During a session, lid close applies configured actions; reopening attempts to resume verified owned freezes and restore saved audio. The session continues. Without an active session, lid changes do nothing." width="880">
+</p>
+
+During a session, closing the lid does each of these, and opening it tries
+to undo them. The timer keeps counting down while the lid is closed.
+
+- **Display and keyboard light go off.** Awake saves their brightness
+  first. With sleep turned off, macOS no longer does this by itself.
+- **Apps on the freeze list are frozen.** Freezing sends an app's processes
+  `SIGSTOP`, which pauses them until `SIGCONT` on lid open. The list starts
+  with Slack, WhatsApp and Discord. "Freeze every other app" is off by
+  default. Even when on, it skips meeting, recording and dictation apps: Zoom,
+  Teams, Webex, FaceTime, Wispr Flow, Granola, Otter, OBS and Loom.
+- **Audio is muted.** Lid open unmutes each output Awake muted, even if you
+  switched to another one.
+- **Low Power Mode turns on.** It turns off when the lid opens, unless a
+  battery or heat rule still needs it.
+- **Docker Desktop is frozen when no container runs.** This one is off by
+  default.
+
+On Mac laptops with Apple silicon or a T2 chip, closing the lid disconnects
+the built-in microphone in hardware. Recording a meeting with the lid closed
+needs AirPods or an external mic.
+
+[docs/lid-close.md](docs/lid-close.md) has the details: how Docker is checked,
+how brightness is restored, the one-time settings change when you upgrade,
+and how to test lid actions without closing the lid.
+
+## How recovery works
+
+<p align="center">
+  <img src="docs/assets/recovery-flow.svg" alt="The app and a launchd backstop coordinate through a shared lock and recovery journal. The app handles normal cleanup. The backstop checks every minute and attempts due recovery, leaving valid active sessions alone. Failed or unreadable recovery evidence stays on disk; saved audio needs the app and unconfirmed stopped processes need inspection." width="880">
+</p>
+
+Awake writes each change to a **recovery journal**, a file on disk, before
+it makes the change. Ending the session tries to undo what the journal lists.
+If the app crashes or quits, the recovery agent tries the same once the
+session's end time has passed.
+
+Some things need you:
+
+- The recovery agent can't restore audio. Open Awake again for that.
+- The recovery agent doesn't watch the battery or the temperature.
+- Awake only unfreezes a process it can prove it froze. A frozen process
+  it can't prove stays frozen until you check it.
+
+If the menu shows a recovery warning, deal with it before you leave the Mac
+alone. [docs/recovery.md](docs/recovery.md) explains each case.
+
+## Optional extras
+
+<details>
+<summary><strong>iPhone hotspot handoff and tmux</strong></summary>
+
+If the Wi-Fi drops during a session, Awake can join your iPhone's hotspot.
+Set System Settings > Wi-Fi > Ask to join hotspots to Automatically, then enter
+the hotspot's name and password in Awake's Settings. The password stays in
+your login Keychain. Awake asks for Location Services access, because
+macOS requires it to read Wi-Fi network names. It never reads your location.
+After you reinstall Awake, enter the password again.
+
+After 90 seconds without a network, Awake can also type `continue` into a
+tmux pane running a coding agent. It only types into panes you list in
+Settings and mark yourself:
+
+```bash
+tmux set-option -p -t <session:window.pane> @awake-nudge on
+```
+
+It doesn't press Enter unless you turn that on. Mark a pane you don't type in.
+[docs/extras.md](docs/extras.md) has the details.
+
+</details>
+
+<details>
+<summary><strong>Chrome, Chromium, Arc and Comet throttling</strong></summary>
+
+These browsers slow down windows that macOS reports as hidden, which includes
+every window while the lid is closed. If a running browser lacks
+`--disable-backgrounding-occluded-windows` or
+`--disable-renderer-backgrounding`, the right-click menu offers "Relaunch
+[browser] unthrottled". It asks first, because relaunching quits the browser,
+and tabs come back only if the browser reopens them on startup. Some web apps
+may still stop with the lid closed.
+[docs/extras.md](docs/extras.md#chrome-chromium-arc-and-comet-throttling) has the
+details.
+
+</details>
+
+<details>
+<summary><strong>Configuration and privacy</strong></summary>
+
+Settings live in `~/Library/Application Support/Awake/config.json` and logs
+in `~/Library/Logs/Awake/`. Awake sets both folders and their files to
+owner-only permissions. It leaves symlinks and access control lists (ACLs,
+extra per-account permission entries) as they are, so another account can
+still have access through one. Logs can contain Wi-Fi names, process details
+and tmux targets, so check them before you share one.
+[docs/extras.md](docs/extras.md#configuration-and-privacy) has the details.
+
+</details>
+
+## Uninstall
+
+From your checkout:
+
+```bash
+./scripts/uninstall.sh          # removes the app, the agent and the sudoers rule
+./scripts/uninstall.sh --purge  # also removes settings and logs
+```
+
+From an unpacked release zip, run `./uninstall.sh` in its folder instead. The
+uninstaller undoes any open session first and stops if it can't.
+[docs/install.md](docs/install.md#uninstall) has the details.
+
+## Development
+
+```bash
+swift build
+swift test
+```
+
+The tests use fakes and temporary folders, so they never change your power
+settings. See [Contributing](CONTRIBUTING.md), [Security reporting](SECURITY.md),
+[Release validation](docs/release-validation.md) and [Design notes](docs/spec.md).
 
 ## License
 
-MIT.
+Copyright © 2026 Parth Jairam. All rights reserved; see [LICENSE](LICENSE).
+Awake is a fork of [Insomnia](https://github.com/krishhgg/Insomnia) by Krish
+Garg, used under the MIT License; the notice is in
+[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES).
