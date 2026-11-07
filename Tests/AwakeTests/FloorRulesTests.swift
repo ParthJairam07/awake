@@ -3,12 +3,75 @@ import XCTest
 
 final class FloorRulesTests: XCTestCase {
     /// nil is a machine with no battery (desktop).
-    func eval(_ percent: Int?, charging: Bool = false, thermal: ProcessInfo.ThermalState = .nominal, lid: Bool = false, lp: Bool = false, config: Config = Config()) -> [FloorRules.Action] {
-        eval(battery: percent.map { .percent($0) } ?? .none, charging: charging, thermal: thermal, lid: lid, lp: lp, config: config)
+    func eval(_ percent: Int?, charging: Bool = false, draining: Bool = false, thermal: ProcessInfo.ThermalState = .nominal, lid: Bool = false, lp: Bool = false, config: Config = Config()) -> [FloorRules.Action] {
+        eval(battery: percent.map { .percent($0) } ?? .none, charging: charging, draining: draining, thermal: thermal, lid: lid, lp: lp, config: config)
     }
 
-    func eval(battery: BatteryStatus, charging: Bool = false, thermal: ProcessInfo.ThermalState = .nominal, lid: Bool = false, lp: Bool = false, config: Config = Config()) -> [FloorRules.Action] {
-        FloorRules.evaluate(battery: battery, isCharging: charging, thermal: thermal, lidClosed: lid, lowPowerSetByUs: lp, config: config)
+    func eval(battery: BatteryStatus, charging: Bool = false, draining: Bool = false, thermal: ProcessInfo.ThermalState = .nominal, lid: Bool = false, lp: Bool = false, config: Config = Config()) -> [FloorRules.Action] {
+        FloorRules.evaluate(battery: battery, isCharging: charging, thermal: thermal, lidClosed: lid, lowPowerSetByUs: lp, config: config, chargerDraining: draining)
+    }
+
+    // Phase 0: a charger too weak for the load is no charger to the floors.
+    func testDrainingOnAWeakChargerCountsAsOnBattery() {
+        XCTAssertEqual(eval(39, charging: true, draining: true), [.enableLowPower(.battery)])
+        XCTAssertEqual(eval(9, charging: true, draining: true), [.endSession(.batteryFloor)])
+        XCTAssertEqual(eval(39, charging: true, draining: true, lp: true), [])
+        XCTAssertEqual(eval(45, charging: true, draining: true, lp: true), [.disableLowPower])
+        XCTAssertEqual(eval(battery: .unreadable(misses: 2), charging: true, draining: true), [.endSession(.batteryUnreadable)])
+    }
+
+    func testDrainingFlagWithoutAChargerChangesNothing() {
+        XCTAssertEqual(eval(39, charging: false, draining: true), eval(39))
+        XCTAssertEqual(eval(80, charging: true, draining: true), [])
+    }
+
+    func testChargerKeepingUpAgainClearsTheBatteryCause() {
+        XCTAssertEqual(eval(39, charging: true, draining: false, lp: true), [.disableLowPower])
+    }
+
+    // Phase 0: finer heat signals than the thermal state.
+    func evalThermal(_ reading: ThermalReading, lp: Bool = false, config: Config = Config()) -> [FloorRules.Action] {
+        FloorRules.evaluate(battery: .percent(80), isCharging: true, thermal: .nominal, lidClosed: false, lowPowerSetByUs: lp, config: config, thermalReading: reading)
+    }
+
+    func testCPUSpeedLimitAtOrBelowTheSettingEnablesLowPower() {
+        XCTAssertEqual(evalThermal(ThermalReading(speedLimit: 50)), [.enableLowPower(.thermal)])
+        XCTAssertEqual(evalThermal(ThermalReading(speedLimit: 51)), [])
+        XCTAssertEqual(evalThermal(ThermalReading(speedLimit: 100, batteryTemperatureC: 30)), [])
+        XCTAssertEqual(evalThermal(ThermalReading(speedLimit: 60), lp: true), [.disableLowPower])
+    }
+
+    func testBatteryTemperatureFloors() {
+        XCTAssertEqual(evalThermal(ThermalReading(batteryTemperatureC: 45)), [.enableLowPower(.thermal)])
+        XCTAssertEqual(evalThermal(ThermalReading(batteryTemperatureC: 44.9)), [])
+        XCTAssertEqual(evalThermal(ThermalReading(batteryTemperatureC: 55)), [.endSession(.batteryHot)])
+        XCTAssertEqual(evalThermal(ThermalReading(batteryTemperatureC: 55), lp: true), [.endSession(.batteryHot)])
+    }
+
+    func testThermalRulesOffIgnoresTheReadings() {
+        var config = Config()
+        config.thermalRules = false
+        XCTAssertEqual(evalThermal(ThermalReading(speedLimit: 10, batteryTemperatureC: 70), config: config), [])
+    }
+
+    func testZeroTurnsEachThermalReadingRuleOff() {
+        var config = Config()
+        config.throttleLowPowerPercent = 0
+        config.batteryTempLowPowerC = 0
+        config.batteryTempEndC = 0
+        XCTAssertEqual(evalThermal(ThermalReading(speedLimit: 10, batteryTemperatureC: 70), config: config), [])
+    }
+
+    func testUnknownReadingsChangeNothing() {
+        XCTAssertEqual(evalThermal(.unknown), [])
+        XCTAssertEqual(eval(39, thermal: .nominal), [.enableLowPower(.battery)])
+    }
+
+    func testThermalBodyNamesTheSignal() {
+        let config = Config()
+        XCTAssertTrue(FloorRules.thermalBody(thermal: .serious, reading: .unknown, config: config).contains("serious"))
+        XCTAssertTrue(FloorRules.thermalBody(thermal: .nominal, reading: ThermalReading(speedLimit: 40), config: config).contains("40%"))
+        XCTAssertTrue(FloorRules.thermalBody(thermal: .nominal, reading: ThermalReading(batteryTemperatureC: 46.2), config: config).contains("46 °C"))
     }
 
     // Row 1: battery below lowPowerFloor -> lowpowermode 1
@@ -220,6 +283,63 @@ final class FloorRuleDriverTests: XCTestCase {
         XCTAssertEqual(h.guardFake.calls.last, "lowpowermode 0")
         XCTAssertEqual(try h.store.loadState()?.lowPowerSetByUs, false)
         XCTAssertEqual(h.notifier.posts.last?.title, "Low Power Mode off")
+    }
+
+    /// The weak-charger notice is posted once per draining spell, before
+    /// the floors act on it, and the floors treat the Mac as on battery.
+    func testWeakChargerIsAnnouncedOnceAndFloorsApply() async throws {
+        let m = h.makeManager()
+        await m.start(duration: 3600)
+        let driver = FloorRuleDriver(manager: m, notifier: h.notifier)
+        await driver.run(battery: .percent(55), isCharging: true, thermal: .nominal, lidClosed: false, chargerDraining: true)
+        XCTAssertEqual(h.notifier.posts.map(\.title).filter { $0 == "Charger too weak" }.count, 1)
+        XCTAssertTrue(h.notifier.posts.last?.body.contains("55%") ?? false, h.notifier.posts.last?.body ?? "")
+        XCTAssertFalse(h.guardFake.calls.contains("lowpowermode 1"), "55% is above the floor")
+
+        await driver.run(battery: .percent(39), isCharging: true, thermal: .nominal, lidClosed: false, chargerDraining: true)
+        XCTAssertEqual(h.notifier.posts.map(\.title).filter { $0 == "Charger too weak" }.count, 1, "not repeated within one spell")
+        XCTAssertEqual(h.guardFake.calls.last, "lowpowermode 1")
+        XCTAssertEqual(h.notifier.posts.last?.title, "Low Power Mode on")
+
+        // The charger keeps up again: the mode goes off and the disable is
+        // not attributed to a charger that was there all along.
+        await driver.run(battery: .percent(39), isCharging: true, thermal: .nominal, lidClosed: false, chargerDraining: false)
+        XCTAssertEqual(h.guardFake.calls.last, "lowpowermode 0")
+        XCTAssertEqual(h.notifier.posts.last?.title, "Low Power Mode off")
+        XCTAssertEqual(h.notifier.posts.last?.body, "Charger connected.")
+
+        // A second spell is announced again.
+        await driver.run(battery: .percent(45), isCharging: true, thermal: .nominal, lidClosed: false, chargerDraining: true)
+        XCTAssertEqual(h.notifier.posts.map(\.title).filter { $0 == "Charger too weak" }.count, 2)
+    }
+
+    func testThrottledCPUEnablesLowPowerWithTheLimitInTheNotice() async throws {
+        let m = h.makeManager()
+        await m.start(duration: 3600)
+        let driver = FloorRuleDriver(manager: m, notifier: h.notifier)
+        await driver.run(battery: .percent(90), isCharging: true, thermal: .nominal, lidClosed: false, thermalReading: ThermalReading(speedLimit: 25))
+        XCTAssertEqual(h.guardFake.calls.last, "lowpowermode 1")
+        XCTAssertEqual(h.notifier.posts.last?.title, "Low Power Mode on")
+        XCTAssertTrue(h.notifier.posts.last?.body.contains("25%") ?? false, h.notifier.posts.last?.body ?? "")
+        await driver.run(battery: .percent(90), isCharging: true, thermal: .nominal, lidClosed: false, thermalReading: ThermalReading(speedLimit: 100))
+        XCTAssertEqual(h.guardFake.calls.last, "lowpowermode 0")
+    }
+
+    func testHotBatteryEndsTheSession() async throws {
+        let m = h.makeManager()
+        await m.start(duration: 3600)
+        let driver = FloorRuleDriver(manager: m, notifier: h.notifier)
+        await driver.run(battery: .percent(90), isCharging: true, thermal: .nominal, lidClosed: false, thermalReading: ThermalReading(batteryTemperatureC: 58))
+        XCTAssertFalse(m.isActive)
+    }
+
+    func testWeakChargerBelowTheEndFloorEndsTheSession() async throws {
+        let m = h.makeManager()
+        await m.start(duration: 3600)
+        let driver = FloorRuleDriver(manager: m, notifier: h.notifier)
+        await driver.run(battery: .percent(8), isCharging: true, thermal: .nominal, lidClosed: false, chargerDraining: true)
+        XCTAssertFalse(m.isActive)
+        XCTAssertTrue(h.notifier.posts.map(\.title).contains("Charger too weak"))
     }
 
     func testLowPowerFailureRollsBackJournal() async throws {

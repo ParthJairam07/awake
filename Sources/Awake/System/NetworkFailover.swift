@@ -782,6 +782,15 @@ final class NetworkFailover {
     private let notifier: any Notifying
     private let configProvider: @MainActor () -> Config
     private let clock: @Sendable () -> Date
+    /// Phase 0: the internet check behind a satisfied path. nil: trust the
+    /// path alone.
+    private let probe: (any InternetProbing)?
+    private let probeInterval: TimeInterval
+    private(set) var reachability = ReachabilityTracker()
+    /// The last state the path monitor reported; the probe only runs while
+    /// the path itself is up, since a down path is already an outage.
+    private(set) var lastPathSatisfied = true
+    private var probeLoop: Task<Void, Never>?
 
     private var monitor: NWPathMonitor?
     private(set) var retryTimer: Timer?
@@ -808,6 +817,8 @@ final class NetworkFailover {
         notifier: any Notifying,
         wifiInterface: String? = nil,
         clock: @escaping @Sendable () -> Date = { Date() },
+        probe: (any InternetProbing)? = CaptivePortalProbe(),
+        probeInterval: TimeInterval = 60,
         config: @escaping @MainActor () -> Config
     ) {
         self.paths = paths
@@ -818,6 +829,8 @@ final class NetworkFailover {
         self.notifier = notifier
         self.wifiInterface = wifiInterface
         self.clock = clock
+        self.probe = probe
+        self.probeInterval = probeInterval
         self.configProvider = config
     }
 
@@ -839,12 +852,17 @@ final class NetworkFailover {
         }
         m.start(queue: .main)
         monitor = m
-        Log.info("network failover started (wifi \(wifiInterface ?? "unresolved"))")
+        startProbeLoop()
+        Log.info("network failover started (wifi \(wifiInterface ?? "unresolved"), internet probe \(probe == nil ? "off" : "every \(Int(probeInterval)) s"))")
     }
 
     func stop() {
         monitor?.cancel()
         monitor = nil
+        probeLoop?.cancel()
+        probeLoop = nil
+        reachability = ReachabilityTracker()
+        lastPathSatisfied = true
         cancelTimer()
         for task in inflight.values { task.cancel() }
         inflight.removeAll()
@@ -900,13 +918,52 @@ final class NetworkFailover {
     /// What the NWPathMonitor calls. Internal so tests can exercise the
     /// driver-owned task without a monitor.
     func handlePath(satisfied: Bool) {
+        lastPathSatisfied = satisfied
         track { [weak self] in await self?.process(satisfied: satisfied) }
     }
 
     /// Feed one path update through the machine and apply its outputs.
     /// Public so tests can drive the driver without an NWPathMonitor.
     func simulate(satisfied: Bool) async {
+        lastPathSatisfied = satisfied
         await process(satisfied: satisfied)
+    }
+
+    /// Every `probeInterval` while started: ask the internet, not the path.
+    private func startProbeLoop() {
+        probeLoop?.cancel()
+        guard probe != nil else { return }
+        probeLoop = Task { @MainActor [weak self, probeInterval] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .seconds(probeInterval))
+                guard !Task.isCancelled, let self else { return }
+                await self.probeNow()
+            }
+        }
+    }
+
+    /// One internet check, applied through the same machine as the path:
+    /// two failures in a row on a satisfied path open an outage (the
+    /// hotspot join and tmux nudge then run as for a lost path); a success
+    /// during an outage the probe opened, or a path recovery the probe has
+    /// confirmed, closes it. Internal so tests can run a tick directly.
+    func probeNow() async {
+        guard let probe, lastPathSatisfied, configProvider().internetProbe else { return }
+        let epoch = self.epoch
+        let result = await probe.reachable()
+        guard !Task.isCancelled, self.epoch == epoch, lastPathSatisfied else { return }
+        reachability.record(result)
+        if reachability.down {
+            if !machine.inOutage {
+                Log.info("wifi path satisfied but the internet is unreachable (captive portal or dead DNS): treating as an outage")
+                await process(satisfied: false, source: "internet probe")
+            }
+        } else if result == true, machine.inOutage {
+            // The path is up and the internet answers: whether the probe or
+            // a portal behind a path recovery held the outage open, it ends.
+            Log.info("internet reachable again")
+            await process(satisfied: true, source: "internet probe")
+        }
     }
 
     /// Runs `operation` in a task that `stop()` cancels.
@@ -921,12 +978,25 @@ final class NetworkFailover {
         return task
     }
 
-    private func process(satisfied: Bool) async {
+    private func process(satisfied: Bool, source: String = "wifi path") async {
         guard !Task.isCancelled else { return }
+        var satisfied = satisfied
+        if satisfied, source == "wifi path", machine.inOutage, let probe, configProvider().internetProbe {
+            // A path back up behind a captive portal is not a recovery:
+            // confirm before the nudge types `continue` into the agents.
+            let epoch = self.epoch
+            let result = await probe.reachable()
+            guard !Task.isCancelled, self.epoch == epoch else { return }
+            reachability.record(result)
+            if result == false {
+                Log.info("wifi path satisfied but the internet is unreachable: outage continues")
+                satisfied = false
+            }
+        }
         let now = clock()
         let outputs = satisfied ? machine.pathSatisfied(at: now) : machine.pathUnsatisfied(at: now)
         if outputs.isEmpty { return }
-        if !satisfied { Log.info("wifi path unsatisfied") }
+        if !satisfied { Log.info("\(source) unsatisfied") }
         await apply(outputs)
     }
 

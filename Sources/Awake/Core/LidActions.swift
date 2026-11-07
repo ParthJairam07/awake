@@ -4,11 +4,12 @@ import Foundation
 /// undone on lid open. Every step is journaled to state.json *before* the
 /// side effect; undo reads state.json, never memory.
 ///
-/// Order on close: darken (save display brightness and keyboard backlight
-/// first, then set both to 0 and ask the display to sleep), mute (save
-/// volume + mute state first), freeze scope (the freeze list plus every
-/// other Dock app when `freezeAllApps` is on; one journal write per app),
-/// Docker rule, stop the countdown redraw.
+/// Order on close: lock the screen (not journaled: there is nothing to
+/// undo, the user unlocks), darken (save display brightness and keyboard
+/// backlight first, then set both to 0 and ask the display to sleep), mute
+/// (save volume + mute state first), freeze scope (the freeze list plus
+/// every other Dock app when `freezeAllApps` is on; one journal write per
+/// app), Docker rule, stop the countdown redraw.
 /// Order on open: the exact reverse, driven by `SessionManager.undoLidActions`.
 @MainActor
 final class LidActions {
@@ -18,6 +19,11 @@ final class LidActions {
     private let audio: any AudioControlling
     private let display: any DisplayDimming
     private let keyboard: any KeyboardBacklighting
+    private let locker: any ScreenLocking
+    /// Where a failed lock is reported; nil (tests) logs only.
+    private let notifier: (any Notifying)?
+    /// The lock failure is announced once per session, not on every close.
+    private var lockFailureAnnounced = false
     /// Last trusted brightness values, kept by AppServices while the lid is
     /// open. nil (tests) means the device's own asleep/suppressed reading
     /// decides alone.
@@ -37,7 +43,9 @@ final class LidActions {
         audio: any AudioControlling,
         display: any DisplayDimming = NoopDisplayDimmer(),
         keyboard: any KeyboardBacklighting = NoopKeyboardBacklight(),
-        sampler: BrightnessSampler? = nil
+        sampler: BrightnessSampler? = nil,
+        locker: any ScreenLocking = NoopScreenLock(),
+        notifier: (any Notifying)? = nil
     ) {
         self.manager = manager
         self.freezer = freezer
@@ -46,6 +54,8 @@ final class LidActions {
         self.display = display
         self.keyboard = keyboard
         self.sampler = sampler
+        self.locker = locker
+        self.notifier = notifier
     }
 
     /// Records a lid event as it arrives and returns its number. Every
@@ -84,6 +94,10 @@ final class LidActions {
             // queued right behind and must not find a fresh freeze.
             let stillCurrent = { [self] in
                 manager.isActive && manager.endTicket == ticket && lidEvents == event && !Task.isCancelled
+            }
+
+            if config.lockScreenOnLidClose {
+                lockScreen()
             }
 
             if config.darkenDisplayOnLidClose {
@@ -133,6 +147,25 @@ final class LidActions {
             manager.pauseCountdown()
         }
         if !ran { Log.error("lid close actions skipped: recovery lock busy") }
+    }
+
+    /// Phase 0: lock first, before anything that can wait. Not journaled,
+    /// there is nothing to undo. A failure does not stop the other actions;
+    /// it is logged every time and announced once per session, because an
+    /// unlocked unattended Mac is the thing the user most wants to know.
+    private func lockScreen() {
+        do {
+            try locker.lock()
+            Log.info("screen locked (lid closed)")
+        } catch {
+            Log.error("screen lock on lid close failed: \(error)")
+            guard !lockFailureAnnounced else { return }
+            lockFailureAnnounced = true
+            notifier?.post(
+                title: "Screen not locked",
+                body: "Awake could not lock the screen when the lid closed: \(error). The Mac is awake and unlocked."
+            )
+        }
     }
 
     func onOpen() async {

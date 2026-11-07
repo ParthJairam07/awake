@@ -110,6 +110,79 @@ final class PowerMonitorTests: XCTestCase {
         XCTAssertTrue(condition(), what)
     }
 
+    /// Phase 0: on AC, each read also samples the watts and feeds the
+    /// charger trend; two discharging reads mark the charger too weak, and
+    /// unplugging clears it. Off AC the watts are not read at all.
+    func testChargerDrainingFollowsTheWattsWhileOnAC() {
+        let reads = Reads()
+        reads.next = (.percent(60), true)
+        let watts = Watts()
+        watts.next = -4
+        let monitor = PowerMonitor(reader: { reads.read() }, wattsReader: { watts.read() }, recheckDelay: .seconds(3600))
+        monitor.refreshBattery()
+        XCTAssertFalse(monitor.chargerDraining)
+        monitor.refreshBattery()
+        XCTAssertTrue(monitor.chargerDraining)
+        XCTAssertTrue(monitor.isCharging, "still on AC as far as IOKit knows")
+        XCTAssertEqual(watts.count, 2)
+
+        reads.next = (.percent(58), false)
+        monitor.refreshBattery()
+        XCTAssertFalse(monitor.chargerDraining)
+        XCTAssertEqual(watts.count, 2, "watts are not read off the charger")
+    }
+
+    func testChargerDrainingFollowsAFallingPercentWithoutWatts() {
+        let reads = Reads()
+        reads.next = (.percent(60), true)
+        let monitor = PowerMonitor(reader: { reads.read() }, wattsReader: { nil }, recheckDelay: .seconds(3600))
+        monitor.refreshBattery()
+        reads.next = (.percent(58), true)
+        monitor.refreshBattery()
+        XCTAssertTrue(monitor.chargerDraining)
+    }
+
+    /// Phase 0: the thermal poll reports a change like a battery event and
+    /// stops reporting once stopped.
+    func testThermalPollReportsChanges() async {
+        let reads = Reads()
+        reads.next = (.percent(60), true)
+        let reading = Locked<ThermalReading>(.unknown)
+        let monitor = PowerMonitor(reader: { reads.read() }, wattsReader: { nil }, thermalReader: { reading.value }, thermalPollInterval: .seconds(3600), recheckDelay: .seconds(3600))
+        let changes = Locked<Int>(0)
+        monitor.onChange = { changes.value += 1 }
+        monitor.start()
+        defer { monitor.stop() }
+        await monitor.pollThermal()
+        XCTAssertEqual(monitor.thermalReading, .unknown)
+        XCTAssertEqual(changes.value, 0, "unknown to unknown is not a change")
+        reading.value = ThermalReading(speedLimit: 50)
+        await monitor.pollThermal()
+        XCTAssertEqual(monitor.thermalReading.speedLimit, 50)
+        XCTAssertEqual(changes.value, 1)
+        await monitor.pollThermal()
+        XCTAssertEqual(changes.value, 1, "same reading: no event")
+        monitor.stop()
+        XCTAssertEqual(monitor.thermalReading, .unknown)
+        reading.value = ThermalReading(speedLimit: 10)
+        await monitor.pollThermal()
+        XCTAssertEqual(changes.value, 1, "stopped: nothing reported")
+    }
+
+    final class Watts: @unchecked Sendable {
+        private let lock = NSLock()
+        private var _next: Double?
+        private var _count = 0
+        var next: Double? {
+            get { lock.withLock { _next } }
+            set { lock.withLock { _next = newValue } }
+        }
+        var count: Int { lock.withLock { _count } }
+        func read() -> Double? {
+            lock.withLock { _count += 1; return _next }
+        }
+    }
+
     /// The menu's refresh never counts a miss: the count only moves on the
     /// event path, where the floor rules see it. A readable read still
     /// replaces the state, and a miss after it starts the count over.

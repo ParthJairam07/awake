@@ -41,6 +41,14 @@ struct Config: Codable, Equatable, Sendable {
     /// Switch Low Power Mode on while the lid is closed (heat and battery:
     /// with sleep disabled the machine otherwise runs at full speed).
     var lowPowerOnLidClose: Bool = true
+    /// Lock the login session on lid close. With sleep disabled the Mac
+    /// never reaches the lock macOS would apply on wake, so an unattended
+    /// laptop would otherwise stay open to its terminals and agents.
+    var lockScreenOnLidClose: Bool = true
+    /// A lid closed with an external display online is a desk, not a
+    /// departure: skip the lid actions (and the lid's Low Power Mode) and
+    /// run them only if that display goes away while the lid stays closed.
+    var skipLidActionsOnExternalDisplay: Bool = true
 
     // Agent apps that must never be throttled or frozen.
     var agentList: [String] = Config.defaultAgentList
@@ -60,9 +68,30 @@ struct Config: Codable, Equatable, Sendable {
     /// `setLowPowerFloor` and `normalizeFloors`.
     var endFloor: Int = 10
     var thermalRules: Bool = true
+    /// CPU speed limit (`pmset -g therm`, percent of full speed) at or below
+    /// which Low Power Mode goes on under `thermalRules`: macOS is already
+    /// throttling this hard, so the Mac is hot whatever the thermal state
+    /// says. 0 turns the rule off.
+    var throttleLowPowerPercent: Int = 50
+    /// Battery temperature (°C) at or above which Low Power Mode goes on,
+    /// and at or above which the session ends, under `thermalRules`. Only
+    /// where the battery driver reports a temperature. 0 turns each off.
+    var batteryTempLowPowerC: Int = 45
+    var batteryTempEndC: Int = 55
+
+    // Resources
+    /// Notify on critical memory pressure and on free disk under the floor.
+    var resourceAlerts: Bool = true
+    /// Free space on the home volume (GB) under which the disk alert posts.
+    /// 0 turns it off.
+    var freeDiskFloorGB: Int = 10
 
     // Network failover
     var hotspotSSID: String = ""
+    /// Check that the internet answers (Apple's captive-portal page) rather
+    /// than trusting "Wi-Fi connected": a portal or dead DNS then counts
+    /// as an outage, and a recovery is only reported once the page loads.
+    var internetProbe: Bool = true
     /// Seconds of outage after which tmux panes are nudged.
     var nudgeThreshold: TimeInterval = 90
     /// tmux targets as `session:window.pane`. Only a pane carrying the
@@ -160,11 +189,19 @@ struct Config: Codable, Equatable, Sendable {
         muteOnLidClose = try c.decodeIfPresent(Bool.self, forKey: .muteOnLidClose) ?? (lidCloseDefaultsApplied && d.muteOnLidClose)
         darkenDisplayOnLidClose = try c.decodeIfPresent(Bool.self, forKey: .darkenDisplayOnLidClose) ?? d.darkenDisplayOnLidClose
         lowPowerOnLidClose = try c.decodeIfPresent(Bool.self, forKey: .lowPowerOnLidClose) ?? d.lowPowerOnLidClose
+        lockScreenOnLidClose = try c.decodeIfPresent(Bool.self, forKey: .lockScreenOnLidClose) ?? d.lockScreenOnLidClose
+        skipLidActionsOnExternalDisplay = try c.decodeIfPresent(Bool.self, forKey: .skipLidActionsOnExternalDisplay) ?? d.skipLidActionsOnExternalDisplay
         agentList = try c.decodeIfPresent([String].self, forKey: .agentList) ?? d.agentList
         disableAppNapForAgents = try c.decodeIfPresent(Bool.self, forKey: .disableAppNapForAgents) ?? d.disableAppNapForAgents
         lowPowerFloor = try c.decodeIfPresent(Int.self, forKey: .lowPowerFloor) ?? d.lowPowerFloor
         endFloor = try c.decodeIfPresent(Int.self, forKey: .endFloor) ?? d.endFloor
         thermalRules = try c.decodeIfPresent(Bool.self, forKey: .thermalRules) ?? d.thermalRules
+        throttleLowPowerPercent = try c.decodeIfPresent(Int.self, forKey: .throttleLowPowerPercent) ?? d.throttleLowPowerPercent
+        batteryTempLowPowerC = try c.decodeIfPresent(Int.self, forKey: .batteryTempLowPowerC) ?? d.batteryTempLowPowerC
+        batteryTempEndC = try c.decodeIfPresent(Int.self, forKey: .batteryTempEndC) ?? d.batteryTempEndC
+        resourceAlerts = try c.decodeIfPresent(Bool.self, forKey: .resourceAlerts) ?? d.resourceAlerts
+        freeDiskFloorGB = try c.decodeIfPresent(Int.self, forKey: .freeDiskFloorGB) ?? d.freeDiskFloorGB
+        internetProbe = try c.decodeIfPresent(Bool.self, forKey: .internetProbe) ?? d.internetProbe
         hotspotSSID = try c.decodeIfPresent(String.self, forKey: .hotspotSSID) ?? d.hotspotSSID
         nudgeThreshold = try c.decodeIfPresent(TimeInterval.self, forKey: .nudgeThreshold) ?? d.nudgeThreshold
         tmuxTargets = try c.decodeIfPresent([String].self, forKey: .tmuxTargets) ?? d.tmuxTargets

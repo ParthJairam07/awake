@@ -667,13 +667,15 @@ final class StatusItemController: NSObject {
             sleepHeld: manager.state.sleepDisabledByUs,
             machine: StatusLines.machine(
                 lidClosed: status.lidClosed,
+                lidOnDesk: status.lidOnDesk,
                 watts: status.instantWatts(),
                 wifiSSID: WiFiStatusName.display(
                     ssid: status.wifiSSID,
                     locationAuthorized: (status as? LiveStatusSource)?.locationPermission.isAuthorized ?? true
                 ),
                 batteryPercent: status.batteryPercent,
-                isCharging: status.isCharging
+                isCharging: status.isCharging,
+                chargerDraining: status.chargerDraining
             ),
             actions: StatusLines.actions(
                 frozenCount: status.frozenCount,

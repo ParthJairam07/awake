@@ -37,15 +37,70 @@ final class LidActionsTests: XCTestCase {
         sampler: BrightnessSampler? = nil,
         reassertDelay: Duration = .seconds(3600),
         lockTimeout: TimeInterval = 0.3,
-        retryDelay: TimeInterval = 60
+        retryDelay: TimeInterval = 60,
+        locker: any ScreenLocking = NoopScreenLock(),
+        lockScreen: Bool = true
     ) async -> (SessionManager, LidActions) {
         let m = h.makeManager(lockTimeout: lockTimeout, retryDelay: retryDelay, reassertDelay: reassertDelay)
         m.config.muteOnLidClose = mute
         m.config.freezeList = ["com.tinyspeck.slackmacgap"]
+        m.config.lockScreenOnLidClose = lockScreen
         if let dockerRule { m.config.dockerRule = dockerRule }
         let docker = DockerRule(freezer: freezer, probe: dockerIdle)
-        let actions = LidActions(manager: m, freezer: freezer, docker: docker, audio: h.audio, display: h.display, keyboard: h.keyboard, sampler: sampler)
+        let actions = LidActions(manager: m, freezer: freezer, docker: docker, audio: h.audio, display: h.display, keyboard: h.keyboard, sampler: sampler, locker: locker, notifier: h.notifier)
         return (m, actions)
+    }
+
+    // MARK: Screen lock (phase 0)
+
+    /// The lock is the first close action and is not journaled: the open
+    /// has nothing to undo for it.
+    func testCloseLocksTheScreenFirstAndOpenLeavesItLocked() async throws {
+        let lock = RecordingScreenLock()
+        let (m, actions) = await make(locker: lock)
+        await m.start(duration: 3600)
+        await actions.onClose()
+        XCTAssertEqual(lock.calls, 1)
+        XCTAssertTrue(logText().contains("screen locked (lid closed)"), logText())
+        await actions.onOpen()
+        XCTAssertEqual(lock.calls, 1)
+        XCTAssertFalse(h.notifier.posts.contains { $0.title == "Screen not locked" })
+    }
+
+    func testTheSettingTurnsTheLockOff() async throws {
+        let lock = RecordingScreenLock()
+        let (m, actions) = await make(locker: lock, lockScreen: false)
+        await m.start(duration: 3600)
+        await actions.onClose()
+        XCTAssertEqual(lock.calls, 0)
+    }
+
+    func testWithoutASessionTheLidCloseDoesNotLock() async throws {
+        let lock = RecordingScreenLock()
+        let (_, actions) = await make(locker: lock)
+        await actions.onClose()
+        XCTAssertEqual(lock.calls, 0)
+    }
+
+    /// A failed lock does not stop the other actions, is logged each time,
+    /// and is announced once per session.
+    func testLockFailureIsLoggedAnnouncedOnceAndTheCloseGoesOn() async throws {
+        let lock = RecordingScreenLock()
+        lock.failWith = "login.framework not found"
+        let (m, actions) = await make(locker: lock)
+        await m.start(duration: 3600)
+        await actions.onClose()
+        XCTAssertEqual(lock.calls, 1)
+        XCTAssertTrue(logText().contains("screen lock on lid close failed: login.framework not found"), logText())
+        let notices = h.notifier.posts.filter { $0.title == "Screen not locked" }
+        XCTAssertEqual(notices.count, 1)
+        XCTAssertTrue(notices.first?.body.contains("awake and unlocked") ?? false)
+        XCTAssertEqual(try h.store.loadState()?.frozenProcesses.isEmpty, false, "the freeze still ran after the failed lock")
+
+        await actions.onOpen()
+        await actions.onClose()
+        XCTAssertEqual(lock.calls, 2)
+        XCTAssertEqual(h.notifier.posts.filter { $0.title == "Screen not locked" }.count, 1, "announced once per session")
     }
 
     /// A sampler over the harness fakes whose idle clock the test controls.

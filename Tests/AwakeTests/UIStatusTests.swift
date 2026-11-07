@@ -295,6 +295,19 @@ final class UIStatusTests: XCTestCase {
             StatusLines.machine(lidClosed: false, watts: nil, wifiSSID: "", batteryPercent: 82, isCharging: true),
             "Lid: open \u{00B7} 82% charging"
         )
+        XCTAssertEqual(
+            StatusLines.machine(lidClosed: true, watts: -3.4, wifiSSID: nil, batteryPercent: 64, isCharging: true, chargerDraining: true),
+            "Lid: closed \u{00B7} -3.4 W \u{00B7} 64% charger too weak"
+        )
+        XCTAssertEqual(
+            StatusLines.machine(lidClosed: false, watts: nil, wifiSSID: nil, batteryPercent: 64, isCharging: false, chargerDraining: true),
+            "Lid: open \u{00B7} 64%",
+            "draining only qualifies a connected charger"
+        )
+        XCTAssertEqual(
+            StatusLines.machine(lidClosed: true, lidOnDesk: true, watts: nil, wifiSSID: nil, batteryPercent: nil, isCharging: false),
+            "Lid: closed, external display"
+        )
     }
 
     func testActionsLine() {
@@ -1252,8 +1265,10 @@ final class UIStatusTests: XCTestCase {
 @Observable
 final class RecordingStatusSource: StatusSource {
     var lidClosed = false
+    var lidOnDesk = false
     var batteryPercent: Int? = nil
     var isCharging = false
+    var chargerDraining = false
     var wifiSSID: String? = nil
     var lastGap: TimeInterval? = nil
     var frozenCount = 0

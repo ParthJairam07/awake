@@ -174,6 +174,14 @@ struct SettingsView: View {
                     Button("Dismiss") { manager.dismissLidCloseNotice() }
                 }
             }
+            Toggle("Lock the screen on lid close", isOn: bind(\.lockScreenOnLidClose))
+            Text("With sleep disabled the Mac never reaches the lock macOS applies on wake, so an unattended laptop would stay open to its terminals and agents.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Toggle("Leave everything alone when an external display is connected", isOn: bind(\.skipLidActionsOnExternalDisplay))
+            Text("A lid closed with a monitor attached is a desk, not a departure: no lock, darken, mute, freeze or Low Power Mode. If the monitor is unplugged while the lid stays closed, the actions run then.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
             Toggle("Turn off the display and keyboard backlight", isOn: bind(\.darkenDisplayOnLidClose))
             ForEach(manager.darkenRefusals, id: \.self) { reason in
                 Text(reason)
@@ -252,12 +260,27 @@ struct SettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Toggle("Thermal rules (Low Power Mode when hot, end when critical)", isOn: bind(\.thermalRules))
+            Text("Hot means the thermal state is serious, or macOS has limited the CPU to \(manager.config.throttleLowPowerPercent)% or less, or the battery reports \(manager.config.batteryTempLowPowerC) °C or more; the session ends at \(manager.config.batteryTempEndC) °C. A charger that cannot keep up with the load counts as no charger: the battery floors apply while it drains.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Alert on critical memory pressure and low disk", isOn: bind(\.resourceAlerts))
+            Stepper(value: freeDiskFloor, in: 0...200, step: 5) {
+                LabeledContent("Disk alert below", value: "\(manager.config.freeDiskFloorGB) GB free")
+            }
         }
+    }
+
+    private var freeDiskFloor: Binding<Int> {
+        Binding(get: { manager.config.freeDiskFloorGB }, set: { v in update { $0.freeDiskFloorGB = max(0, v) } })
     }
 
     private var networkSection: some View {
         Section {
             TextField("Hotspot SSID", text: bind(\.hotspotSSID))
+            Toggle("Check that the internet answers, not just that Wi-Fi is connected", isOn: bind(\.internetProbe))
+            Text("A captive portal or dead DNS then counts as an outage, and a recovery is reported only once Apple's connectivity page loads.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
             HStack {
                 SecureField("Hotspot password", text: Binding(get: { hotspot.password }, set: { hotspot.edit($0) }))
                     .onSubmit(savePassword)

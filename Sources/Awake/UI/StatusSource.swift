@@ -7,8 +7,12 @@ import Observation
 @MainActor
 protocol StatusSource: AnyObject, Observable {
     var lidClosed: Bool { get }
+    /// Lid closed on a desk with an external display: actions skipped.
+    var lidOnDesk: Bool { get }
     var batteryPercent: Int? { get }
     var isCharging: Bool { get }
+    /// On AC but losing charge (`ChargerTrend`).
+    var chargerDraining: Bool { get }
     var wifiSSID: String? { get }
     /// Length of the most recent network outage, nil if none this session.
     var lastGap: TimeInterval? { get }
@@ -39,8 +43,10 @@ protocol StatusSource: AnyObject, Observable {
 @Observable
 final class PlaceholderStatus: StatusSource {
     var lidClosed: Bool = false
+    var lidOnDesk: Bool = false
     var batteryPercent: Int? = nil
     var isCharging: Bool = false
+    var chargerDraining: Bool = false
     var wifiSSID: String? = nil
     var lastGap: TimeInterval? = nil
     var frozenCount: Int = 0
@@ -60,14 +66,19 @@ final class PlaceholderStatus: StatusSource {
 /// Pure formatting for the menu's status block, kept out of the views so
 /// it can be tested.
 enum StatusLines {
-    /// "Lid: closed · 4.1 W · Wi-Fi: iPhone". Unknown parts are omitted.
-    static func machine(lidClosed: Bool, watts: Double?, wifiSSID: String?, batteryPercent: Int?, isCharging: Bool) -> String {
-        var parts: [String] = ["Lid: \(lidClosed ? "closed" : "open")"]
+    /// "Lid: closed · 4.1 W · Wi-Fi: iPhone". Unknown parts are omitted. A
+    /// charger that is losing to the load reads "64% charger too weak".
+    static func machine(lidClosed: Bool, lidOnDesk: Bool = false, watts: Double?, wifiSSID: String?, batteryPercent: Int?, isCharging: Bool, chargerDraining: Bool = false) -> String {
+        var parts: [String] = ["Lid: \(lidClosed ? (lidOnDesk ? "closed, external display" : "closed") : "open")"]
         if let w = watts {
             parts.append(String(format: "%.1f W", w))
         }
         if let p = batteryPercent {
-            parts.append(isCharging ? "\(p)% charging" : "\(p)%")
+            if isCharging {
+                parts.append(chargerDraining ? "\(p)% charger too weak" : "\(p)% charging")
+            } else {
+                parts.append("\(p)%")
+            }
         }
         if let ssid = wifiSSID, !ssid.isEmpty {
             parts.append("Wi-Fi: \(ssid)")

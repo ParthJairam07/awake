@@ -25,46 +25,80 @@ enum BatteryStatus: Equatable, Sendable {
 
 /// Spec section 6 event sources: `IOPSNotificationCreateRunLoopSource` for
 /// battery changes and `ProcessInfo.thermalStateDidChangeNotification`.
-/// Watts are read from `AppleSmartBattery` only when `instantWatts()` is
-/// called (the popover opening), never polled. While the battery is
-/// unreadable the list is re-read every `recheckDelay`, since IOKit sends
-/// no event for a read that keeps failing.
+/// Watts are read from `AppleSmartBattery` when `instantWatts()` is called
+/// (the popover opening) and, while on AC, once per battery event to feed
+/// `ChargerTrend`; never polled on a timer. While the battery is unreadable
+/// the list is re-read every `recheckDelay`, since IOKit sends no event for
+/// a read that keeps failing.
 @MainActor
 final class PowerMonitor {
     typealias Reader = @Sendable () -> (battery: BatteryStatus, charging: Bool)
+    typealias WattsReader = @Sendable () -> Double?
+    typealias ThermalReader = @Sendable () async -> ThermalReading
 
     private(set) var battery: BatteryStatus = .none
     var percent: Int? { battery.percent }
     /// True when on AC power or actively charging. The floor rules treat
     /// "charger connected" as the undo condition (spec section 6).
     private(set) var isCharging: Bool = false
+    /// True while `isCharging` and yet the battery is losing charge: the
+    /// charger is too weak for the load (`ChargerTrend`). The floor rules
+    /// then treat the Mac as on battery.
+    var chargerDraining: Bool { trend.draining }
+    private var trend = ChargerTrend()
     private(set) var thermalState: ProcessInfo.ThermalState = ProcessInfo.processInfo.thermalState
+    /// CPU speed limit and battery temperature (`ThermalProbe`), polled
+    /// every `thermalPollInterval` while started; `.unknown` otherwise.
+    private(set) var thermalReading = ThermalReading.unknown
 
     /// Called on the main actor after any battery or thermal change.
     var onChange: (() -> Void)?
 
     private let reader: Reader
+    private let wattsReader: WattsReader
+    private let thermalReader: ThermalReader
+    private let thermalPollInterval: Duration
+    private var thermalPoll: Task<Void, Never>?
     private let recheckDelay: Duration
     private var source: CFRunLoopSource?
     private var thermalObserver: NSObjectProtocol?
     private var running = false
     private var recheck: Task<Void, Never>?
 
-    /// `reader` and `recheckDelay` are injection points for tests; the
-    /// defaults read IOKit and wait 30 s between re-reads of an unreadable
-    /// battery.
-    init(reader: @escaping Reader = { PowerMonitor.readBattery() }, recheckDelay: Duration = .seconds(30)) {
+    /// `reader`, `wattsReader` and `recheckDelay` are injection points for
+    /// tests; the defaults read IOKit and wait 30 s between re-reads of an
+    /// unreadable battery.
+    init(
+        reader: @escaping Reader = { PowerMonitor.readBattery() },
+        wattsReader: @escaping WattsReader = { PowerMonitor.readInstantWatts() },
+        thermalReader: @escaping ThermalReader = { await ThermalProbe.read() },
+        thermalPollInterval: Duration = .seconds(60),
+        recheckDelay: Duration = .seconds(30)
+    ) {
         self.reader = reader
+        self.wattsReader = wattsReader
+        self.thermalReader = thermalReader
+        self.thermalPollInterval = thermalPollInterval
         self.recheckDelay = recheckDelay
     }
 
     func start() {
         guard !running else { return }
         running = true
-        // Misses from before a stop are not consecutive with this run.
+        // Misses from before a stop are not consecutive with this run, and
+        // neither is a charger trend.
         battery = .none
+        trend = ChargerTrend()
         refreshBattery()
         thermalState = ProcessInfo.processInfo.thermalState
+        thermalReading = .unknown
+        thermalPoll = Task { @MainActor [weak self, thermalPollInterval] in
+            while !Task.isCancelled {
+                guard let self else { return }
+                await self.pollThermal()
+                try? await Task.sleep(for: thermalPollInterval)
+            }
+        }
 
         let refcon = Unmanaged.passUnretained(self).toOpaque()
         if let s = IOPSNotificationCreateRunLoopSource(Self.callback, refcon)?.takeRetainedValue() {
@@ -88,6 +122,9 @@ final class PowerMonitor {
         running = false
         recheck?.cancel()
         recheck = nil
+        thermalPoll?.cancel()
+        thermalPoll = nil
+        thermalReading = .unknown
         if let s = source {
             CFRunLoopRemoveSource(CFRunLoopGetMain(), s, .commonModes)
             source = nil
@@ -113,6 +150,7 @@ final class PowerMonitor {
             battery = snap.battery
         }
         isCharging = snap.charging
+        updateTrend()
         if recheck == nil { scheduleRecheckIfUnreadable() }
     }
 
@@ -127,7 +165,31 @@ final class PowerMonitor {
             battery = snap.battery
         }
         isCharging = snap.charging
+        updateTrend()
         scheduleRecheckIfUnreadable()
+    }
+
+    /// Watts are only read on AC: off the charger the floors already apply.
+    private func updateTrend() {
+        trend.update(percent: battery.percent, onAC: isCharging, watts: isCharging ? wattsReader() : nil)
+    }
+
+    /// One thermal poll: `pmset -g therm` and the battery temperature.
+    /// Reports a change like a battery event. Internal so tests can run a
+    /// poll without waiting for the timer.
+    func pollThermal() async {
+        let reading = await thermalReader()
+        guard running, reading != thermalReading else { return }
+        thermalReading = reading
+        Log.info("thermal \(Self.describe(reading))")
+        onChange?()
+    }
+
+    static func describe(_ r: ThermalReading) -> String {
+        var parts: [String] = []
+        if let limit = r.speedLimit { parts.append("cpu speed limit \(limit)%") }
+        if let t = r.batteryTemperatureC { parts.append(String(format: "battery %.1f °C", t)) }
+        return parts.isEmpty ? "no speed limit, no battery temperature" : parts.joined(separator: ", ")
     }
 
     /// Signed watts: negative while discharging, positive while charging.
@@ -232,10 +294,10 @@ final class PowerMonitor {
     }
 
     private func handleBattery() {
-        let before = (battery, isCharging)
+        let before = (battery, isCharging, chargerDraining)
         readCountingMisses()
-        if before != (battery, isCharging) {
-            Log.info("battery \(Self.describe(battery)) \(isCharging ? "charging" : "on battery")")
+        if before != (battery, isCharging, chargerDraining) {
+            Log.info("battery \(Self.describe(battery)) \(Self.describeCharger(isCharging: isCharging, draining: chargerDraining))")
             onChange?()
         }
     }
@@ -252,6 +314,11 @@ final class PowerMonitor {
             guard !Task.isCancelled else { return }
             self?.handleBattery()
         }
+    }
+
+    static func describeCharger(isCharging: Bool, draining: Bool) -> String {
+        if !isCharging { return "on battery" }
+        return draining ? "charger too weak, draining" : "charging"
     }
 
     static func describe(_ battery: BatteryStatus) -> String {

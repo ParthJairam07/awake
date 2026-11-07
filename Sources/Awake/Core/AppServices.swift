@@ -8,8 +8,13 @@ import Observation
 @Observable
 final class SystemStatus {
     var lidClosed: Bool = false
+    /// The lid is closed on a desk with an external display online, so the
+    /// lid actions were not run (`LidPolicy.desk`).
+    var lidOnDesk: Bool = false
     var batteryPercent: Int?
     var isCharging: Bool = false
+    /// On AC but losing charge: the charger is too weak for the load.
+    var chargerDraining: Bool = false
     var thermalState: ProcessInfo.ThermalState = .nominal
     var wifiSSID: String?
     /// Length of the last Wi-Fi outage this session, in seconds.
@@ -59,6 +64,12 @@ final class AppServices {
     private let docker: DockerRule
     private let keychain: any KeychainStoring
     private let lid = LidObserver()
+    /// Display connects and disconnects, for the desk-mode decision on a
+    /// closed lid (`LidPolicy`).
+    private let displays: DisplayObserver
+    private let locker: any ScreenLocking
+    private var resources: ResourceMonitor?
+    private let freeDisk: ResourceMonitor.DiskReader
     /// The file trigger behind scripts/simulate-lid.sh. Compiled into debug
     /// builds and AWAKE_LID_SIMULATION release builds only
     /// (`LidSimulationBuild`); nil in every other build, and only started
@@ -110,13 +121,19 @@ final class AppServices {
         browser: BrowserThrottle? = nil,
         idleSeconds: @escaping @Sendable () -> Double = { UserInput.secondsSinceLastInput() },
         lidSimulation: (any LidSimulating)? = LidSimulationBuild.makeWatcher(),
-        lidSimulationEnabled: Bool = LidSimulationBuild.isCompiledIn
+        lidSimulationEnabled: Bool = LidSimulationBuild.isCompiledIn,
+        externalDisplay: @escaping DisplayObserver.Reader = { ExternalDisplays.read() },
+        locker: any ScreenLocking = LoginFrameworkScreenLock(),
+        freeDisk: @escaping ResourceMonitor.DiskReader = { ResourceMonitor.readFreeDisk() }
     ) {
         self.paths = paths
         self.notifier = notifier
         self.audio = audio
         self.display = display
         self.keyboard = keyboard
+        self.displays = DisplayObserver(reader: externalDisplay)
+        self.locker = locker
+        self.freeDisk = freeDisk
         self.lidSimulation = lidSimulation
         self.lidSimulationEnabled = lidSimulationEnabled
         self.sampler = BrightnessSampler(display: display, keyboard: keyboard, idleSeconds: idleSeconds)
@@ -144,7 +161,7 @@ final class AppServices {
 
         (notifier as? Notifier)?.requestAuthorizationIfNeeded()
 
-        lidActions = LidActions(manager: manager, freezer: freezer, docker: docker, audio: audio, display: display, keyboard: keyboard, sampler: sampler)
+        lidActions = LidActions(manager: manager, freezer: freezer, docker: docker, audio: audio, display: display, keyboard: keyboard, sampler: sampler, locker: locker, notifier: notifier)
         floors = FloorRuleDriver(manager: manager, notifier: notifier)
         // The panel under Awake's own Low Power Mode reads the mode's
         // rescaled value: sample once more just before the mode goes on
@@ -155,9 +172,12 @@ final class AppServices {
         manager.resyncAfterCommand = { [weak self] replayLid in self?.resyncAfterCommand(replayLid: replayLid) }
         sampler.follow(manager)
 
+        displays.onChange = { [weak self] in self?.displaysChanged() }
+        displays.start()
         lid.onChange = { [weak self] closed in self?.lidChanged(closed) }
         lid.start()
         status.lidClosed = lid.isClosed
+        status.lidOnDesk = false
         sampleBrightnessIfLidOpen()
         let timer = DispatchSource.makeTimerSource(queue: .main)
         timer.schedule(deadline: .now() + Self.sampleInterval, repeating: Self.sampleInterval, leeway: Self.sampleLeeway)
@@ -173,6 +193,10 @@ final class AppServices {
         syncPower()
         // Apply the floors once: the battery may already be below one.
         powerChanged()
+
+        let res = ResourceMonitor(notifier: notifier, diskReader: freeDisk) { [weak manager] in manager?.config ?? Config() }
+        res.start()
+        resources = res
 
         let net = NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { [weak manager] in
             manager?.config ?? Config()
@@ -198,9 +222,14 @@ final class AppServices {
         lid.stop()
         lid.onChange = nil
         lastLidEvent = nil
+        displays.stop()
+        displays.onChange = nil
+        status.lidOnDesk = false
         stopLidSimulation()
         power.stop()
         power.onChange = nil
+        resources?.stop()
+        resources = nil
         sampleTimer?.cancel()
         sampleTimer = nil
         postOpenSampleTask?.cancel()
@@ -383,14 +412,24 @@ final class AppServices {
         lastLidEvent = closed
         status.lidClosed = closed
         guard let actions = lidActions else { return }
+        let policy = LidPolicy.decide(closed: closed, externalOnline: displays.externalOnline, config: manager?.config ?? Config())
+        status.lidOnDesk = policy == .desk
         // Numbered now, not when its turn comes: an open makes a close that
-        // is still queued or waiting on a Docker probe stale at once.
+        // is still queued or waiting on a Docker probe stale at once. A desk
+        // close is numbered too, so a close queued before it is stale.
         let event = actions.lidEventArrived()
         let previous = lidTasks.last
         let task = Task { @MainActor in
             await previous?.value
             guard !Task.isCancelled, self.running else { return }
-            if closed { await actions.onClose(event: event) } else { await actions.onOpen() }
+            switch policy {
+            case .close: await actions.onClose(event: event)
+            case .desk: Log.info("lid closed with an external display online: desk mode, lid actions skipped")
+            // An open after a desk close has nothing to undo; the undo is
+            // journal-driven and finds nothing. Cheap, and it also covers
+            // a display unplugged and replugged while the lid was closed.
+            case .open: await actions.onOpen()
+            }
             guard !Task.isCancelled, self.running else { return }
             self.syncState()
             // The lid is a Low Power Mode cause (spec section 4): re-run the
@@ -398,6 +437,46 @@ final class AppServices {
             // floor chain, so it stays serialized with battery events.
             self.powerChanged()
             if !closed { self.scheduleSampleAfterOpen() }
+        }
+        lidTasks.append(task)
+    }
+
+    /// A display came or went. Only a closed lid cares: the external
+    /// display that made the close a desk has gone (the laptop is now shut
+    /// with no screen: run the close), or one has appeared under a closed
+    /// lid whose actions ran (the user docked it: undo them). The lid event
+    /// is replayed through `lidChanged`, so the ordering and staleness
+    /// rules are the same as for the hinge.
+    private func displaysChanged() {
+        guard running, let closed = lastLidEvent, closed, lidActions != nil else { return }
+        let policy = LidPolicy.decide(closed: true, externalOnline: displays.externalOnline, config: manager?.config ?? Config())
+        let wasDesk = status.lidOnDesk
+        switch (wasDesk, policy) {
+        case (true, .close):
+            Log.info("external display gone with the lid closed: running the lid close actions")
+            lidChanged(true)
+        case (false, .desk):
+            Log.info("external display connected with the lid closed: undoing the lid actions")
+            status.lidOnDesk = true
+            replayLidOpenForDesk()
+        default:
+            break
+        }
+    }
+
+    /// Queue an undo for a lid that is still closed but now on a desk.
+    private func replayLidOpenForDesk() {
+        guard let actions = lidActions else { return }
+        // Numbered like a lid event: a close still queued is stale now.
+        actions.lidEventArrived()
+        let previous = lidTasks.last
+        let task = Task { @MainActor in
+            await previous?.value
+            guard !Task.isCancelled, self.running else { return }
+            await actions.onOpen()
+            guard !Task.isCancelled, self.running else { return }
+            self.syncState()
+            self.powerChanged()
         }
         lidTasks.append(task)
     }
@@ -427,13 +506,17 @@ final class AppServices {
         guard let floors else { return }
         let battery = power.battery
         let charging = power.isCharging
+        let draining = power.chargerDraining
         let thermal = power.thermalState
-        let lidClosed = status.lidClosed
+        let reading = power.thermalReading
+        // A lid closed on a desk is not a closed lid to the floors: the
+        // user is at the Mac and Low Power Mode would slow them down.
+        let lidClosed = status.lidClosed && !status.lidOnDesk
         let previous = floorTasks.last
         let task = Task { @MainActor in
             await previous?.value
             guard !Task.isCancelled, self.running else { return }
-            await floors.run(battery: battery, isCharging: charging, thermal: thermal, lidClosed: lidClosed)
+            await floors.run(battery: battery, isCharging: charging, thermal: thermal, lidClosed: lidClosed, chargerDraining: draining, thermalReading: reading)
             guard !Task.isCancelled, self.running else { return }
             self.syncState()
         }
@@ -443,6 +526,7 @@ final class AppServices {
     private func syncPower() {
         status.batteryPercent = power.percent
         status.isCharging = power.isCharging
+        status.chargerDraining = power.chargerDraining
         status.thermalState = power.thermalState
     }
 
