@@ -155,6 +155,8 @@ final class OutageNoticeTests: XCTestCase {
         let notifier = RecordingNotifier()
         var config = Config()
         config.hotspotSSID = "iPhone"
+        // Recovery below the nudge threshold would otherwise be silent.
+        config.nudgeThreshold = 3600
         let n = make(notifier: notifier, config: config, clock: clock)
         await n.simulate(satisfied: false)
         clock.advance(90)
@@ -165,8 +167,6 @@ final class OutageNoticeTests: XCTestCase {
         XCTAssertTrue(notifier.posts[0].body.contains("iPhone"), notifier.posts[0].body)
         XCTAssertTrue(n.outageAnnounced)
 
-        // Recovery below the nudge threshold would otherwise be silent.
-        config.nudgeThreshold = 3600
         await n.simulate(satisfied: true)
         XCTAssertEqual(notifier.posts.map(\.title), ["Internet down", "Internet back"])
         XCTAssertFalse(n.outageAnnounced)
