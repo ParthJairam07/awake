@@ -10,8 +10,10 @@
 # The signature is always ad-hoc (`codesign --sign -`): releases are ad-hoc
 # signed and not notarized (docs/releasing.md). It identifies only this build
 # (its cdhash), and macOS blocks the first launch of a downloaded copy until
-# the user allows it. The bundle has no nested code, so there is no --deep;
-# backstop.sh under Contents/Resources is sealed as a resource.
+# the user allows it. The one piece of nested code, the `awake` command under
+# Contents/Helpers, is signed by itself first and the bundle after it, so
+# there is no --deep; backstop.sh under Contents/Resources is sealed as a
+# resource.
 set -euo pipefail
 
 # Fixed tool paths: never taken from PATH. Tests patch these lines in a
@@ -113,13 +115,23 @@ STALE
 fi
 BIN="$("$SWIFT" build -c release ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"} --show-bin-path)/Awake"
 [[ -x "$BIN" ]] || { echo "binary not found at $BIN" >&2; exit 1; }
+# The `awake` command (leases, `awake mcp`), built by the same `swift build`
+# as the product awake-cli: a product named awake would be the same file as
+# Awake on a volume that ignores case, which the default macOS volume does.
+CLI_BIN="${BIN%/Awake}/awake-cli"
+[[ -x "$CLI_BIN" ]] || { echo "binary not found at $CLI_BIN" >&2; exit 1; }
 
 # 2. Bundle ------------------------------------------------------------------
 APP="$OUTPUT/Awake.app"
 step "Assembling $APP"
 "$RM" -rf "$APP"
-"$MKDIR" -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+"$MKDIR" -p "$APP/Contents/MacOS" "$APP/Contents/Resources" "$APP/Contents/Helpers"
 "$CP" "$BIN" "$APP/Contents/MacOS/Awake"
+# Under Contents/Helpers, not beside the app's executable: Contents/MacOS/awake
+# and Contents/MacOS/Awake are one file where case is ignored.
+# scripts/link-cli.sh and Settings link it onto the PATH as `awake`.
+"$CP" "$CLI_BIN" "$APP/Contents/Helpers/awake"
+"$CHMOD" 755 "$APP/Contents/Helpers/awake"
 "$CP" "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 "$CP" "$ROOT/Resources/AppIcon.icns" "$APP/Contents/Resources/AppIcon.icns"
 # backstop.sh goes into the bundle before it is signed, so the signature's
@@ -131,6 +143,8 @@ step "Assembling $APP"
 
 # 3. Sign --------------------------------------------------------------------
 step "Signing ad-hoc (this build is identified only by its cdhash)"
+# Inside out: the bundle's seal records the command's signature.
+"$CODESIGN" --force --sign - "$APP/Contents/Helpers/awake"
 "$CODESIGN" --force --sign - "$APP"
 "$CODESIGN" --verify --strict "$APP"
 "$CODESIGN" -dvv "$APP" 2>&1 | grep -E '^(Identifier|Signature|Authority|TeamIdentifier|CDHash)=' || true

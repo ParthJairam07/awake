@@ -323,6 +323,8 @@ final class PackagingTests: XCTestCase {
         }
         try fm.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/backstop.sh"), to: checkout.appendingPathComponent("scripts/backstop.sh"))
         try fm.copyItem(atPath: "/usr/bin/true", toPath: binroot.appendingPathComponent("Awake").path)
+        // The `awake` command, which the same build produces as awake-cli.
+        try fm.copyItem(atPath: "/usr/bin/true", toPath: binroot.appendingPathComponent("awake-cli").path)
 
         func fake(_ name: String, _ body: String) throws -> URL {
             let url = bin.appendingPathComponent(name)
@@ -383,12 +385,18 @@ final class PackagingTests: XCTestCase {
         XCTAssertEqual(r.status, 0, r.output)
         let bundle = out.appendingPathComponent("Awake.app")
         XCTAssertEqual(r.output.components(separatedBy: "\n").filter { !$0.isEmpty }.last, bundle.path, "the bundle path is printed last")
-        for rel in ["Contents/MacOS/Awake", "Contents/Info.plist", "Contents/Resources/AppIcon.icns", "Contents/Resources/backstop.sh", "Contents/_CodeSignature/CodeResources"] {
+        for rel in ["Contents/MacOS/Awake", "Contents/Helpers/awake", "Contents/Info.plist", "Contents/Resources/AppIcon.icns", "Contents/Resources/backstop.sh", "Contents/_CodeSignature/CodeResources"] {
             XCTAssertTrue(FileManager.default.fileExists(atPath: bundle.appendingPathComponent(rel).path), rel)
         }
         let perms = try FileManager.default.attributesOfItem(atPath: Paths.backstopScript(inBundle: bundle).path)[.posixPermissions] as? Int
         XCTAssertEqual(perms.map { $0 & 0o111 }, 0o111, "backstop.sh is executable")
         XCTAssertEqual(try run("/usr/bin/codesign", ["--verify", "--strict", bundle.path]).status, 0)
+        // Phase 4: the `awake` command is nested code with its own ad-hoc
+        // signature, which the bundle's seal covers.
+        let command = CommandLink.command(inBundle: bundle)
+        XCTAssertTrue(FileManager.default.isExecutableFile(atPath: command.path))
+        XCTAssertEqual(try run("/usr/bin/codesign", ["--verify", "--strict", command.path]).status, 0)
+        XCTAssertTrue(try run("/usr/bin/codesign", ["-dvv", command.path]).output.contains("Signature=adhoc"))
         XCTAssertTrue(r.output.contains("Signature=adhoc"), r.output)
         XCTAssertTrue(try CodeRequirement.designated(ofCodeAt: bundle).hasPrefix("cdhash H\""))
 
@@ -434,7 +442,8 @@ final class PackagingTests: XCTestCase {
     /// Releases are ad-hoc signed and not notarized, so the signature is
     /// ad-hoc whatever the environment says: an AWAKE_SIGN_IDENTITY left
     /// over from older instructions changes nothing, and nothing asks for
-    /// the hardened runtime or a timestamp. No --deep (no nested code).
+    /// the hardened runtime or a timestamp. No --deep: the `awake` command,
+    /// the one piece of nested code, is signed by itself before the bundle.
     /// Checked with a recording codesign.
     func testBuildAppAlwaysSignsAdHoc() throws {
         let (script, calls) = try patchedBuildApp(recordingCodesign: true)
@@ -451,6 +460,7 @@ final class PackagingTests: XCTestCase {
             XCTAssertEqual(r.status, 0, "\(label): \(r.output)")
             let recorded = try String(contentsOf: calls, encoding: .utf8).components(separatedBy: "\n").filter { $0.hasPrefix("codesign") }
             XCTAssertEqual(recorded, [
+                "codesign --force --sign - \(bundle)/Contents/Helpers/awake",
                 "codesign --force --sign - \(bundle)",
                 "codesign --verify --strict \(bundle)",
                 "codesign -dvv \(bundle)",
@@ -482,7 +492,8 @@ final class PackagingTests: XCTestCase {
         for call in [
             "mkdir -p \(out.path)",
             "rm -rf \(app)",
-            "mkdir -p \(app)/Contents/MacOS \(app)/Contents/Resources",
+            "mkdir -p \(app)/Contents/MacOS \(app)/Contents/Resources \(app)/Contents/Helpers",
+            "chmod 755 \(app)/Contents/Helpers/awake",
             "cp \(checkout)/Resources/Info.plist \(app)/Contents/Info.plist",
             "cp \(checkout)/Resources/AppIcon.icns \(app)/Contents/Resources/AppIcon.icns",
             "cp \(checkout)/scripts/backstop.sh \(app)/Contents/Resources/backstop.sh",
@@ -491,6 +502,7 @@ final class PackagingTests: XCTestCase {
             XCTAssertTrue(recorded.contains(call), "\(call) not in \(recorded)")
         }
         XCTAssertTrue(recorded.contains { $0.hasPrefix("cp ") && $0.hasSuffix(" \(app)/Contents/MacOS/Awake") }, "\(recorded)")
+        XCTAssertTrue(recorded.contains { $0.hasPrefix("cp ") && $0.hasSuffix("/awake-cli \(app)/Contents/Helpers/awake") }, "\(recorded)")
     }
 
     func testBuildAppNeedsAnOutputDirectory() throws {
