@@ -1,8 +1,20 @@
 # Releasing
 
-How a downloadable Awake build is made, what signs it, and how to verify
-one. The Release workflow (`.github/workflows/release.yml`) does the work;
-this page is the checklist around it.
+The single checklist for cutting an Awake release: tag → CI → cask →
+announce. The Release workflow (`.github/workflows/release.yml`) does the
+building, signing and publishing; this page says what it needs, what to do
+around it, and how to verify the result.
+
+In short:
+
+1. [One-time setup](#one-time-setup): signing secrets, the update key, the
+   Homebrew tap. A release works without any of them; each one adds
+   something.
+2. [Cut the release](#cutting-a-stable-release): test a manual run on a real
+   Mac, push the tag `v<version>`, watch the run.
+3. [Homebrew cask](#homebrew-cask): the workflow points the cask at the
+   release; copy it to the tap if the token is not set.
+4. [Announce](#announce).
 
 ## Channels
 
@@ -10,13 +22,16 @@ this page is the checklist around it.
 | --- | --- | --- |
 | Made by | pushing a tag `v<version>` | the daily schedule (07:17 UTC), or a manual run with the nightly input, on `main` |
 | Tag | `v<version>`, pushed by the maintainer | `nightly-<YYYYMMDD>-<first 12 hex digits of the commit>`, created by the workflow |
-| Zip | `Awake-<version>-macos.zip` | `Awake-<version>-nightly-<YYYYMMDD>-<commit>-macos.zip` |
+| Zip and disk image | `Awake-<version>.zip`, `Awake-<version>.dmg` | `Awake-<version>-nightly-<YYYYMMDD>-<commit>.zip` and `.dmg` |
+| Version in the app | the tag's digits | `CFBundleShortVersionString` from `Resources/Info.plist` |
+| Update feed (`appcast.xml`) | yes, when the update key is set | never |
+| Homebrew cask updated | yes | no |
 | Title | `Awake <version> (stable)` | `Awake nightly <YYYY-MM-DD> (<commit>)` |
 | GitHub marks | Latest, not a prerelease | Pre-release, never Latest |
 | Attestation source ref | `refs/tags/v<version>` | `refs/heads/main` |
 
-Both channels run the same tests, build, package, checksum and attestation
-steps; they differ only in how the run starts, the names and the release
+Both channels run the same tests, build, signing, package, checksum and
+attestation steps; they differ only in how the run starts, the names and the release
 flags. Nobody chooses a nightly: it is whatever `main` held when the run
 started.
 
@@ -26,15 +41,147 @@ release; no workflow built it. Its zip is `Awake-0.1.0-macos-arm64.zip`
 with `scripts/install.sh`, `scripts/uninstall.sh` and `scripts/backstop.sh`
 from the `v0.1.0` tag, it has no attestation, and its release notes give its
 own checksum and install commands. Version 0.1.0 belongs to that release,
-so the next stable release needs a new version in `Resources/Info.plist`.
+so the next stable release needs a higher version.
+
+## One-time setup
+
+All of these are repository secrets (Settings > Secrets and variables >
+Actions). The workflow never fails because one is missing: it publishes what
+it can and says in the run's annotations and in the release notes what kind
+of build it made.
+
+| Secret | What it adds | Without it |
+| --- | --- | --- |
+| `APPLE_CERTIFICATE_P12`, `APPLE_CERTIFICATE_PASSWORD` | Developer ID signature with the hardened runtime | ad-hoc signed; notes say "Unsigned build: right-click → Open on first launch" |
+| `APPLE_ID`, `APPLE_TEAM_ID`, `APPLE_APP_PASSWORD` | notarization and stapling of the app and the disk image, checked with `spctl` | signed but not notarized; notes say so |
+| `SPARKLE_PRIVATE_KEY` (plus the public key committed) | `appcast.xml`, so installed copies update themselves | no feed; the app's updater stays off |
+| `HOMEBREW_TAP_TOKEN` | the cask committed to the tap repository | the cask is on the `homebrew` branch only; copy it by hand |
+
+The repository has to be public for any of the install paths to work: the
+curl installer, the cask, the update feed and the release downloads all
+read from it without credentials.
+
+### Developer ID certificate and notarization
+
+Needs membership of the Apple Developer Program.
+
+1. In Xcode (Settings > Accounts > Manage Certificates) or on
+   developer.apple.com (Certificates, IDs & Profiles), create a **Developer
+   ID Application** certificate. It lands in the login keychain.
+2. In Keychain Access, select the certificate together with its private
+   key, File > Export Items, format .p12, and set a password.
+3. Store both:
+
+   ```bash
+   base64 -i DeveloperID.p12 | gh secret set APPLE_CERTIFICATE_P12 -R ParthJairam07/awake
+   gh secret set APPLE_CERTIFICATE_PASSWORD -R ParthJairam07/awake   # paste the .p12 password
+   ```
+
+   Delete the .p12 afterwards.
+4. For notarization, create an app-specific password at
+   [account.apple.com](https://account.apple.com) (Sign-In and Security >
+   App-Specific Passwords), and find the team id (ten characters) under
+   Membership details on developer.apple.com:
+
+   ```bash
+   gh secret set APPLE_ID -R ParthJairam07/awake            # the Apple Account email
+   gh secret set APPLE_TEAM_ID -R ParthJairam07/awake
+   gh secret set APPLE_APP_PASSWORD -R ParthJairam07/awake  # the app-specific password
+   ```
+
+The workflow imports the certificate into a keychain that exists only for
+the job (`.github/scripts/signing-keychain.sh`), signs with
+`scripts/build-app.sh --sign-identity`, submits with
+`xcrun notarytool submit --wait` and staples (`.github/scripts/notarize.sh`),
+and then requires `spctl -a -vv` to accept the app.
+
+The first time a signed build is installed over an unsigned one, macOS
+treats it as a different app: grant Accessibility, Screen Recording and
+Location again, and the recovery agent is reloaded with the new code
+requirement by the app's next launch.
+
+### Updates
+
+Awake updates itself with [Sparkle](https://sparkle-project.org). The app
+reads `https://github.com/ParthJairam07/awake/releases/latest/download/appcast.xml`
+and accepts only an update signed with the EdDSA key whose public half is in
+`scripts/sparkle-public-key.txt`. That file is empty today, so the updater
+is off in every build. To turn it on, once:
+
+1. Build once so SwiftPM unpacks Sparkle's tools, then make the key pair.
+   The private key is stored in your login keychain; the command prints the
+   public key:
+
+   ```bash
+   swift build
+   .build/artifacts/sparkle/Sparkle/bin/generate_keys
+   ```
+
+2. Put the printed public key, alone on one line, in
+   `scripts/sparkle-public-key.txt` and commit it. `scripts/build-app.sh`
+   writes it into the bundle as `SUPublicEDKey`.
+3. Export the private key and store it as a secret, then delete the file:
+
+   ```bash
+   .build/artifacts/sparkle/Sparkle/bin/generate_keys -x sparkle-private-key.txt
+   gh secret set SPARKLE_PRIVATE_KEY -R ParthJairam07/awake < sparkle-private-key.txt
+   rm -P sparkle-private-key.txt
+   ```
+
+   Keep the keychain item (or an offline copy): losing the private key
+   means installed copies can never be updated again except by hand.
+
+From the next stable release on, the workflow runs Sparkle's
+`generate_appcast` (`.github/scripts/generate-appcast.sh`) and attaches
+`appcast.xml`. It stops if the secret is not the pair of the committed
+public key.
+
+The updater runs only in a build that has the public key **and** a
+Developer ID signature. An ad-hoc build cannot host Sparkle's installer
+safely (nothing ties the update to the app's signer), so there "Check for
+Updates…" explains that and offers the releases page; nothing is downloaded.
+The first release that carries the key is therefore the first one that can
+update itself: every earlier install has to be upgraded by hand once.
+Updates are never checked or installed while a session runs.
+
+### Homebrew tap
+
+`Casks/awake.rb` in this repository is the cask. Homebrew installs from a
+tap repository named `homebrew-awake`, created once:
+
+```bash
+gh repo create ParthJairam07/homebrew-awake --public --description "Homebrew tap for Awake"
+git clone https://github.com/ParthJairam07/homebrew-awake.git
+mkdir -p homebrew-awake/Casks
+git -C awake show homebrew:Casks/awake.rb > homebrew-awake/Casks/awake.rb   # after the first release
+git -C homebrew-awake add Casks/awake.rb
+git -C homebrew-awake commit -m "awake <version>"
+git -C homebrew-awake push
+```
+
+Users then run:
+
+```bash
+brew tap ParthJairam07/awake && brew install --cask awake
+```
+
+To let the workflow update the tap, create a fine-grained personal access
+token limited to `ParthJairam07/homebrew-awake` with Contents: read and
+write, and store it: `gh secret set HOMEBREW_TAP_TOKEN -R ParthJairam07/awake`.
 
 ## What a release contains
 
-`Awake-<version>-macos.zip` (or the nightly name above) holds one folder
-with `Awake.app`, `install.sh` and `uninstall.sh`. `SHA256SUMS` lists the
-zip's SHA-256. Both files are attached to the GitHub Release, and the zip
-carries a GitHub build provenance attestation that names the repository, the
-ref, the commit and the workflow run that produced it.
+| File | What it is |
+| --- | --- |
+| `Awake-<version>.zip` | `Awake.app` at the top level (`ditto -c -k --keepParent`). The cask, the curl installer and Sparkle download this. |
+| `Awake-<version>.dmg` | The same app with an Applications shortcut, for a drag install. |
+| `install.sh`, `uninstall.sh` | The scripts from the released commit. |
+| `SHA256SUMS` | SHA-256 of the four files above. |
+| `appcast.xml` | The update feed, stable releases with the update key only. |
+
+The zip and the disk image carry a GitHub build provenance attestation that
+names the repository, the ref, the commit and the workflow run that
+produced them.
 
 The binary is arm64 only, because the build job runs on an Apple Silicon
 runner and no universal build is made. A release therefore runs on Apple
@@ -43,61 +190,113 @@ Silicon Macs only: the release notes and the README say so, and
 read 1.
 
 The bundle is the one `scripts/build-app.sh` makes: the release binary,
-`Resources/Info.plist`, the icon, and `backstop.sh` sealed under
-`Contents/Resources` before signing. `install.sh` runs the same script for
-a source install, so a downloaded app and a source-built app have the same
-bundle layout and are both ad-hoc signed. Their contents can still differ,
-because a source build may use another checkout, toolchain or architecture,
-or `AWAKE_LID_SIMULATION=1`. The workflow sets `AWAKE_LID_SIMULATION`
-empty, so a release never carries the `simulate-lid.sh` watcher.
+`Resources/Info.plist` with the version written in (`--version`), the icon,
+`Sparkle.framework` under `Contents/Frameworks`, and `backstop.sh` and
+`install.sh` sealed under `Contents/Resources` before signing. `install.sh`
+runs the same script for a source install, so a downloaded app and a
+source-built app have the same layout. Their contents can still differ,
+because a source build is ad-hoc signed and may use another checkout,
+toolchain or architecture, or `AWAKE_LID_SIMULATION=1`. The workflow sets
+`AWAKE_LID_SIMULATION` empty, so a release never carries the
+`simulate-lid.sh` watcher.
 
-The two scripts sit at the zip's top level, so the folder above theirs is
-wherever the user unpacked it. They never take scripts from the folder
-above their own (`ReleaseWorkflowTests` checks the ones the Package step
-copies), and they take sibling scripts only from a source checkout's
-`scripts/` folder with `Package.swift` one level up. The zip's folder is not
-one, so its `install.sh` needs `--app`, and its `uninstall.sh` runs only the
+`install.sh` and `uninstall.sh` never take scripts from the folder above
+their own (`ReleaseWorkflowTests` checks the ones the Package step copies),
+and they take sibling scripts only from a source checkout's `scripts/`
+folder with `Package.swift` one level up. A download folder is not one, so
+there `install.sh` needs `--app`, and `uninstall.sh` runs only the
 `backstop.sh` sealed in the installed app, after verifying the app. A
-`build-app.sh` or `backstop.sh` added to the unpacked folder is not run.
+`build-app.sh` or `backstop.sh` added to that folder is not run.
 
 ## Cutting a stable release
 
-1. Set `CFBundleShortVersionString` in `Resources/Info.plist` to the new
-   version (and bump `CFBundleVersion`). Commit on main. `0.1.0` is taken
-   (see Channels).
-2. Test that commit before anything is published. Start a manual run on it
+1. Pick the version: three numbers, higher than the last release. `0.1.0`
+   is taken (see Channels). Nothing needs editing: the tag's digits are
+   written into the bundle's `CFBundleShortVersionString` and
+   `CFBundleVersion`. Update `Resources/Info.plist` too if you want nightlies
+   and source builds to report the new version.
+2. Test the commit before anything is published. Start a manual run on it
    (Actions, Release, Run workflow, with the nightly box left unticked),
-   download the zip from the run's artifact, check it with
+   download the run's artifact, check it with
    `shasum -a 256 -c SHA256SUMS`, and install it with
-   `./install.sh --allow-unverified-origin --app ./Awake.app` on a Mac you
+   `bash install.sh --allow-unverified-origin --app ./Awake.app` on a Mac you
    can afford to reinstall on. Then run the
    [real-Mac checks](#real-mac-checks-before-a-release), all but the
    release channel ones, and record the results in
-   `docs/release-validation.md`. Fix anything that fails and start again
-   from step 1.
-3. Tag the tested commit `v<version>`, the same digits, and push the tag:
+   `docs/release-validation.md`. Fix anything that fails and start again.
+   The manual run signs and notarizes like a release when the secrets
+   exist, so this is also where a new certificate is first tried.
+3. Tag the tested commit `v<version>` and push the tag:
 
    ```bash
    git tag v0.2.0 <tested commit>
    git push origin v0.2.0
    ```
 
-   The workflow refuses a tag whose digits differ from the plist.
-4. Watch the run. It runs `swift test`, builds and ad-hoc signs the bundle,
-   packages it, attests the zip and creates the GitHub Release, marked
-   Latest, with notes that include the checksum and the verify commands.
-   `gh release create` fails if the tag already has a release, so a rerun
-   never replaces published assets.
-5. Download the zip from the release and check it the way a user would (see
-   below), then install it with the command in the release notes on a Mac
-   you can afford to reinstall on. This is the stable release channel check;
-   record its result with the others.
+   The workflow refuses a tag that is not `v<major>.<minor>.<patch>`.
+4. Watch the run. It runs `swift test`, builds and signs the bundle
+   (Developer ID and notarized, or ad-hoc: see One-time setup), packages the
+   zip and the disk image, writes the update feed when the key is set,
+   attests, and creates the GitHub Release, marked Latest, with generated
+   notes: what kind of build it is, the checksums, the verify commands and
+   an Install section. `gh release create` fails if the tag already has a
+   release, so a rerun never replaces published assets. Read the run's
+   annotations: each missing secret leaves one.
+5. Check the release the way a user would: download, verify (below), and
+   install with each of the three commands in the notes on a Mac you can
+   afford to reinstall on. For a notarized build, `spctl -a -vv
+   ~/Applications/Awake.app` reads "accepted, source=Notarized Developer
+   ID". This is the stable release channel check; record its result with the
+   others.
+6. Do the [Homebrew cask](#homebrew-cask) step, then [announce](#announce).
 
 A manual run (Actions, Release, Run workflow) with the nightly box left
-unticked builds and packages the chosen branch and uploads the zip and
-`SHA256SUMS` as a workflow artifact. It does not attest or publish anything,
-so it is the way to try the pipeline and to get the build that step 2
-tests.
+unticked builds and packages the chosen branch and uploads the zip, the
+disk image, the scripts and `SHA256SUMS` as a workflow artifact. It does not
+attest or publish anything, so it is the way to try the pipeline and to get
+the build that step 2 tests. Every pull request also runs the
+`release-dry-run` job in `ci.yml`, which builds and packages an ad-hoc
+`0.0.0-ci` and uploads the zip, so packaging breakage shows before a tag.
+
+## Homebrew cask
+
+After a stable release is published, the workflow's `cask` job writes the
+release's version and the zip's SHA-256 (from `SHA256SUMS`) into
+`Casks/awake.rb` with `.github/scripts/update-cask.sh` and commits that one
+file to the **`homebrew` branch** of this repository. It never writes to
+`main`: a release does not change the code it was built from, and `main`
+stays protected. The copy on `main` keeps placeholder values; the `homebrew`
+branch always holds the cask for the latest stable release.
+
+- With `HOMEBREW_TAP_TOKEN` set, the job also commits the file to
+  `ParthJairam07/homebrew-awake`, and the step is done.
+- Without it, copy the file yourself:
+
+  ```bash
+  git -C awake fetch origin homebrew
+  git -C awake show origin/homebrew:Casks/awake.rb > homebrew-awake/Casks/awake.rb
+  git -C homebrew-awake commit -am "awake <version>" && git -C homebrew-awake push
+  ```
+
+Then check it: `brew update && brew upgrade --cask awake` on a Mac with the
+previous version, or `brew install --cask awake` on one without, and
+`brew style --cask ParthJairam07/awake/awake`.
+
+The cask installs to `~/Applications`, like `install.sh`, quits the app and
+unloads the recovery agent on uninstall, and with `--zap` also removes the
+sudoers rule, settings and logs. Homebrew does not run `install.sh`: the
+sudoers rule is installed from the app's Setup window on first launch.
+
+## Announce
+
+1. Read the published notes once more; edit them on the release page if a
+   line is wrong for this release.
+2. Add the release's results to `docs/release-validation.md` and commit.
+3. Update the README's "There is no Awake release yet" line after the first
+   release, and the screenshots in `docs/assets/screenshots/` when the UI
+   changed.
+4. Post where the users are, with the release link, the one-line install
+   command and whether the build is notarized.
 
 ## Nightly prereleases
 
@@ -132,17 +331,29 @@ someone with write access could still move or delete one by hand.
 
 ## Signing
 
-Releases on both channels are ad-hoc signed and not notarized.
-`build-app.sh` signs with `codesign --sign -`, so the workflow uses no
-secrets and no keychain, and the signature identifies only that build (its
-cdhash). The stable label is about the channel, not the signature: macOS
-blocks the first launch of any downloaded release until the user allows it
-in System Settings > Privacy & Security.
+A release is signed one of three ways, chosen by which secrets exist (see
+[One-time setup](#one-time-setup)), and its notes open with which:
+
+- **Notarized**: Developer ID signature, hardened runtime,
+  `scripts/entitlements.plist` (one entitlement: Location, which macOS
+  requires for reading Wi-Fi names; no sandbox), notarized and stapled.
+  Opens like any downloaded app.
+- **Developer ID, not notarized**: when the notary secrets are missing.
+  macOS blocks the first launch.
+- **Unsigned (ad-hoc)**: when the certificate is missing. `build-app.sh`
+  signs with `codesign --sign -`, so the signature identifies only that
+  build (its cdhash). The notes read "Unsigned build: right-click → Open on
+  first launch"; on current macOS the user may have to allow it once in
+  System Settings > Privacy & Security instead. The curl installer offers to
+  remove the quarantine flag for such a build, after asking.
+
+Nightlies are signed the same way as stable releases. The stable label is
+about the channel, not the signature.
 
 ## Verifying a download
 
 ```bash
-shasum -a 256 -c SHA256SUMS
+shasum -a 256 -c SHA256SUMS --ignore-missing
 gh attestation verify <zip> -R ParthJairam07/awake \
   --signer-workflow ParthJairam07/awake/.github/workflows/release.yml \
   --source-ref <ref> --source-digest <commit>
@@ -152,7 +363,8 @@ gh attestation verify <zip> -R ParthJairam07/awake \
 for a nightly; `<commit>` is the full commit the release was built from. The
 release notes carry the command filled in.
 
-The first line checks the zip against the checksum published with it. The
+The first line checks each downloaded file against the checksum published
+with it (`--ignore-missing` skips the ones you did not download). The
 second asks GitHub for the attestation signed when the workflow ran and
 checks that this zip is its subject, that the signing workflow is this
 repository's `release.yml` (`--signer-workflow`; with `-R` alone any workflow
@@ -163,7 +375,7 @@ Release workflow built from that commit. They do not show the code is safe;
 the README's warnings apply to every build. `v0.1.0` has no attestation; only
 the checksum in its release notes covers it.
 
-The `install.sh --app` in a workflow-built zip then copies the bundle into
+The `install.sh --app` attached to a workflow-built release then copies the bundle into
 a private temporary directory and checks that copy before the password
 prompt: it runs
 `codesign --verify --strict --deep` and checks the bundle identifier and
@@ -324,6 +536,21 @@ below cover what only a real Mac shows.
 ### Release channels
 
 - Release workflow end to end: tag push, tests, package, attestation, GitHub Release, `gh attestation verify` of the download
+- The release's signing matches its notes: for a notarized build `spctl -a -vv` accepts the installed app and the mounted disk image's app, `xcrun stapler validate` passes on both, and a downloaded copy opens with no Gatekeeper prompt beyond the "downloaded from the internet" one; for an unsigned build the notes open with the unsigned line and the first launch needs right-click → Open or Privacy & Security
+- Each install path on a clean account: `brew tap ParthJairam07/awake && brew install --cask awake`, the disk image dragged to Applications, and the curl one-liner; each ends with the app launching and the Setup window showing
+- `brew uninstall --zap --cask awake` quits the app, unloads the recovery agent and removes the sudoers rule, settings and logs
+- Update from the previous release with "Check for Updates…" (Developer ID build with the update key): the new version is offered, installs, relaunches, and the recovery agent is reloaded for the new bundle; with a session running the check is refused with the reason
+- "Check for Updates…" in an unsigned build explains why it cannot update and opens the releases page; nothing is downloaded
+
+### Setup window
+
+- First launch after a clean install shows Setup once; closing it or finishing it does not show it again; "Setup…" in the right-click menu reopens it
+- Notifications step: "Allow notifications" raises the macOS prompt and the status follows the answer
+- Sudoers step: "Run in Terminal" opens Terminal with the bundled `install.sh --sudoers-only`, which asks for the password in Terminal; after it finishes "Check again" reads installed and a session can start
+- Accessibility and Screen Recording buttons open the right System Settings panes and the status follows a grant without reopening the window
+- Phone alerts step: a topic typed there is the one in Settings > Phone alerts, and "Send test" arrives on the phone
+- Tailscale step reads installed with Tailscale.app present and not installed without
+- Launch at login toggle on the last step matches Settings > App
 - Nightly channel end to end: scheduled run on `main`, tag `nightly-<date>-<commit>` created by the workflow, prerelease not marked Latest, `gh attestation verify --source-ref refs/heads/main --source-digest <commit>` of the download, and a second run on the same commit skipped before building
 
 ### Launch at login

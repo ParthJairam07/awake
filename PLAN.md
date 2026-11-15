@@ -136,6 +136,17 @@ The App Store sandbox forbids what Awake needs: `sudo pmset`, SIGSTOP on other a
 4. **Setapp** later, for discovery and payments; needs notarization anyway.
 5. **Mac App Store** only ever for a cut-down viewer, if at all.
 
+**Built (Step E).** Paths 1 to 3 above exist and share one pipeline:
+
+- **Release workflow** (`.github/workflows/release.yml`): a tag `v<version>` tests, builds, signs, packages and publishes `Awake-<version>.zip`, `.dmg`, `install.sh`, `uninstall.sh` and `SHA256SUMS`, with an attestation and notes that open with how the build is signed. With the Developer ID secrets it signs with the hardened runtime, notarizes and staples; without them it publishes an ad-hoc build labelled "Unsigned build: right-click → Open on first launch". Nothing fails for a missing secret. The tag's digits become the bundle's version (`scripts/build-app.sh --version`).
+- **Sparkle 2** for updates: "Check for Updates…" in the menu and Settings > App > "Check for updates automatically". The feed is `appcast.xml` on the latest release, written by CI when `SPARKLE_PRIVATE_KEY` is set. The updater runs only in a Developer ID build that carries the public key (`scripts/sparkle-public-key.txt`, empty until the owner generates the pair) and never during a session; any other build explains why and links the releases page.
+- **Homebrew cask** (`Casks/awake.rb`): CI writes each release's version and SHA-256 into it on the `homebrew` branch, and into the tap `ParthJairam07/homebrew-awake` when `HOMEBREW_TAP_TOKEN` is set.
+- **`curl … install.sh | bash`**: downloads the latest release, checks it against `SHA256SUMS`, asks, then runs that release's installer.
+- **Setup window** on first launch (and "Setup…" in the menu): what Awake does and how it can fail, notifications, the sudoers rule (Copy / Run in Terminal, never a silent sudo), Accessibility and Screen Recording, ntfy with a test, Tailscale, launch at login. Every step can be skipped.
+- **CI**: every pull request builds and packages an ad-hoc `0.0.0-ci`.
+
+Still to do by hand, once: the Developer ID certificate and notary secrets, the Sparkle key pair, the tap repository, and making the repository public. `docs/releasing.md` is the checklist. Setapp and the App Store are untouched.
+
 ### iPhone: PWA first, then TestFlight, then App Store
 
 1. **PWA** served by the Mac over Tailscale: home-screen icon, full screen, web push (iOS 16.4+). No review, ships at once, same code on Android. Limits: no background work, weaker push, no PiP video.
@@ -158,7 +169,7 @@ The App Store sandbox forbids what Awake needs: `sudo pmset`, SIGSTOP on other a
 ### Order of work
 
 1. Pay the Apple Developer fee now (notarization and TestFlight both need it).
-2. Mac: notarized release + Homebrew cask + Sparkle; keep `install.sh`.
+2. Mac: notarized release + Homebrew cask + Sparkle; keep `install.sh`. *(pipeline built; waits on the certificate, see above)*
 3. Phone: PWA over Tailscale with web push; ntfy / Pushover as fallback.
 4. Native iOS app on TestFlight; App Store after.
 5. Relay service as the paid option for people who will not install Tailscale.

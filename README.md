@@ -2,11 +2,18 @@
 
 **Run your coding agents overnight. Watch and steer them from your phone.**
 
-Awake is a macOS menu bar app plus a phone companion for people who run many AI coding agents at once (Claude Code, Codex, Cursor, Devin, local models) and want to walk away from the laptop: to sleep, commute, or go to the gym.
+Awake is a macOS menu bar app for people who run AI coding agents (Claude Code, Codex, Cursor, Devin, local models) and want to walk away from the laptop. It keeps a MacBook awake for a set time, lid closed if you like, keeps the agents running at full speed, and tells your phone when something needs you: a dying battery, a laptop getting hot, Wi-Fi that looks connected but isn't, a session about to end. Every change it makes to the Mac is written to disk first, so it can be undone after a crash, and a session always has an end time.
 
-It keeps a MacBook awake for a set time, keeps the agents fast, and tells you on your phone when something needs you: an agent stuck on a prompt, a dying battery, a laptop getting hot, Wi-Fi that looks connected but isn't.
+> Recovery can fail, and a running timer is not a safety guarantee: use a stable, well-ventilated surface, not a closed bag. [What can fail and how recovery works](#what-can-fail-and-how-recovery-works) says what Awake does about it and what it cannot do.
 
-> Status: early. Awake is a fork of Insomnia, so the keep-awake core below (timer, lid actions, recovery) works today. The agent and phone layers are being built in the order set out in [PLAN.md](PLAN.md). Recovery can fail, and a running timer is not a safety guarantee: use a stable, well-ventilated surface, not a closed bag.
+<p align="center">
+  <img src="docs/assets/session-flow.svg" alt="A session: start from the menu bar, the Mac stays awake until the end time, a battery or heat floor or you ending it, then everything is put back." width="880">
+</p>
+
+Screenshots of the menu, the Setup window and Settings go in
+[docs/assets/screenshots/](docs/assets/screenshots/) (see the README there for
+the list and how to take them); a short screen recording of a session will
+join them.
 
 ## Why
 
@@ -54,9 +61,45 @@ The first list is the goal; the items marked *(today)* work now, the rest are pl
 
 ## Install
 
-Requires macOS 26 or later on an Apple Silicon Mac.
+Requires macOS 26 or later on an Apple Silicon Mac. Pick one; all three
+install the same release from
+[GitHub Releases](https://github.com/ParthJairam07/awake/releases).
 
-There is no Awake release yet. Until the first one, build from source (below). Once releases exist, the coding-agent prompt and the release channels described here apply.
+**Homebrew**
+
+```bash
+brew tap ParthJairam07/awake
+brew install --cask awake
+```
+
+**Download**
+
+Download `Awake-<version>.dmg` from the
+[latest release](https://github.com/ParthJairam07/awake/releases/latest),
+open it and drag Awake to Applications. The release notes say whether the
+build is signed and notarized by Apple or an **unsigned build: right-click
+→ Open on first launch**.
+
+**Terminal**
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ParthJairam07/awake/main/scripts/install.sh | bash
+```
+
+This downloads the latest release, checks it against the release's
+`SHA256SUMS`, shows what it will install and asks before it changes
+anything. It asks for your password once, in the terminal, for the sudoers
+rule described below; nothing runs `sudo` without telling you.
+
+The first time Awake opens, a Setup window walks through what it needs:
+notifications, the sudoers rule, Accessibility and Screen Recording, phone
+alerts and Tailscale. Every step can be skipped, and "Setup…" in the
+right-click menu brings it back. With Homebrew or the disk image, Setup is
+where the sudoers rule gets installed: until it is, no session can start.
+
+There is no Awake release yet. Until the first one, build from source (below).
+
+**With a coding agent**
 
 Paste this into your coding agent:
 
@@ -68,11 +111,17 @@ For the newest nightly, write "the newest Awake nightly prerelease" in
 place of "the latest stable Awake release". Nightlies are built from `main`
 on each day it has new commits. They have the newest code and may be broken.
 
-To install a release yourself, follow [docs/install.md](docs/install.md). It
+To install a release by hand, follow [docs/install.md](docs/install.md). It
 covers both channels, how to check the download, and `v0.1.0`, which installs
-differently. Settings > App shows the installed version, and "Check for
-updates" there tells you whether a newer release exists without installing
-anything.
+differently.
+
+**Updates.** A build signed with Awake's Developer ID updates itself:
+"Check for Updates…" in the right-click menu checks now, and Settings > App
+> "Check for updates automatically" (on by default) checks in the
+background and asks before installing. An unsigned build never updates
+itself; the same menu item opens the releases page instead, and Homebrew
+users run `brew upgrade --cask awake`. Settings > App shows the installed
+version.
 
 ### Build from source
 
@@ -137,7 +186,21 @@ only work while the app runs.
 Before your first session, check Settings. Then run a short session you can
 watch, and read `~/Library/Logs/Awake/awake.log` afterward.
 
-## What happens when the lid closes
+## How it keeps the Mac awake
+
+A session runs `sudo pmset -a disablesleep 1`, the one switch that keeps a
+Mac awake with the lid closed and no display attached, and
+`sudo pmset -a disablesleep 0` when it ends. That is all "awake" means; there
+is no kernel extension and no daemon that outlives the session. The sudoers
+rule from Install is what lets Awake run those commands (and the two Low
+Power Mode ones) without asking for your password each time.
+
+Because sleep is off for the whole Mac, Awake also does the things sleep
+would have done: it locks the screen and turns the display off when the lid
+closes, and it watches the battery and the temperature and ends the session
+before the Mac gets into trouble.
+
+### What happens when the lid closes
 
 <p align="center">
   <img src="docs/assets/lid-actions.svg" alt="Illustrated Settings defaults: Slack, WhatsApp, and Discord on the freeze list, Docker's idle rule off, mute on. During a session, lid close applies configured actions; reopening attempts to resume verified owned freezes and restore saved audio. The session continues. Without an active session, lid changes do nothing." width="880">
@@ -176,7 +239,7 @@ needs AirPods or an external mic.
 how brightness is restored, the one-time settings change when you upgrade,
 and how to test lid actions without closing the lid.
 
-## How recovery works
+## What can fail and how recovery works
 
 <p align="center">
   <img src="docs/assets/recovery-flow.svg" alt="The app and a launchd backstop coordinate through a shared lock and recovery journal. The app handles normal cleanup. The backstop checks every minute and attempts due recovery, leaving valid active sessions alone. Failed or unreadable recovery evidence stays on disk; saved audio needs the app and unconfirmed stopped processes need inspection." width="880">
@@ -194,8 +257,76 @@ Some things need you:
 - Awake only unfreezes a process it can prove it froze. A frozen process
   it can't prove stays frozen until you check it.
 
+What can go wrong, plainly:
+
+- **The app dies mid-session** (crash, force quit, restart). Sleep stays off
+  until the recovery agent, which runs every minute, turns it back on once
+  the session's end time has passed. Until then the Mac stays awake, as the
+  session asked.
+- **The recovery agent cannot run** (the sudoers rule was removed, the agent
+  was unloaded). Then nothing turns sleep back on. One command does:
+  `sudo pmset -a disablesleep 0`.
+- **The Mac overheats or the battery runs out.** The battery and heat rules
+  only work while the app runs. In a closed bag the Mac can get hot faster
+  than any rule reacts.
+
 If the menu shows a recovery warning, deal with it before you leave the Mac
-alone. [docs/recovery.md](docs/recovery.md) explains each case.
+alone. [docs/recovery.md](docs/recovery.md) explains each case, and
+[docs/faq.md](docs/faq.md) answers the common questions.
+
+## Phone alerts
+
+Every notification Awake posts on the Mac can also go to your phone: battery
+or heat, a charger too weak for the load, internet down and back, session
+ending in 10 minutes, session ended, something not restored. Install the
+[ntfy](https://ntfy.sh) app on the phone, subscribe to a topic with a long
+random name, and type the same topic in Setup or in Settings > Phone alerts;
+"Send test" checks it. Pushover works too. Tokens are kept in the login
+keychain, never in `config.json`. A summary is sent when a session ends.
+
+## Agents
+
+*Landing in this release.* Awake learns which agents are running and what
+state each is in, so an alert can say "agent three is waiting on a prompt"
+instead of "the timer has 40 minutes left":
+
+- **Agent registry.** Finds agent processes by bundle id or command line
+  (Claude Code, Codex, Cursor, Aider, Devin CLI, Ollama, LM Studio), and
+  tmux panes you mark.
+- **Per-agent state.** Alive, CPU, memory, how long since it last produced
+  output, waiting for input, stalled, exited.
+- **Prompt and dialog detector.** Uses the Accessibility permission to read
+  the sheets and dialogs that block an agent (Gatekeeper, permission
+  prompts, keychain, sudo) and sends their text and buttons to the phone.
+- **Hooks.** Configs for Claude Code (`Notification`, `Stop`) and Codex
+  notify that post to Awake's local endpoint.
+- **Before an early end.** Ahead of a battery or heat end, agents get a save
+  signal and, if you opt in, each repo gets `git commit -am wip && git push`.
+- **Priority.** Under battery, heat or memory pressure, low-priority agents
+  are paused first, with the same journaled, identity-checked pause the
+  freeze list uses.
+
+## Leases
+
+*Landing in this release.* Agents can ask for awake time themselves:
+
+```bash
+awake lease --for 2h --reason "refactor billing"
+```
+
+The same request is available as an MCP tool, so an agent calls it without a
+shell. The Mac stays awake while any lease is held, capped by a maximum you
+set, and the session ends when the last lease is released or expires. Each
+lease has an owner, a reason and an expiry.
+
+## Privacy
+
+There are no servers of ours. Awake sends nothing anywhere unless you
+configure it to: phone alerts go to ntfy or Pushover only if you set a topic
+or turn Pushover on, and then only the notification text. Update checks
+fetch one file from this repository's GitHub releases. There is no
+telemetry, no account and no analytics. Settings and logs stay on the Mac
+(see Configuration and privacy under Optional extras).
 
 ## Optional extras
 
@@ -252,6 +383,9 @@ and tmux targets, so check them before you share one.
 
 ## Uninstall
 
+With Homebrew: `brew uninstall --cask awake` (add `--zap` to remove the
+sudoers rule, settings and logs too). End a running session first.
+
 From your checkout:
 
 ```bash
@@ -259,7 +393,8 @@ From your checkout:
 ./scripts/uninstall.sh --purge  # also removes settings and logs
 ```
 
-From an unpacked release zip, run `./uninstall.sh` in its folder instead. The
+Without a checkout, download `uninstall.sh` from the release's page and run
+`bash uninstall.sh` instead. The
 uninstaller undoes any open session first and stops if it can't.
 [docs/install.md](docs/install.md#uninstall) has the details.
 
@@ -272,9 +407,10 @@ swift test
 
 The tests use fakes and temporary folders, so they never change your power
 settings. See [Contributing](CONTRIBUTING.md), [Security reporting](SECURITY.md),
-[Release validation](docs/release-validation.md) and [Design notes](docs/spec.md).
+[Release validation](docs/release-validation.md), [Releasing](docs/releasing.md),
+[FAQ](docs/faq.md) and [Design notes](docs/spec.md).
 
-## License
+## Licence
 
 Copyright © 2026 Parth Jairam. All rights reserved; see [LICENSE](LICENSE).
 Awake is a fork of [Insomnia](https://github.com/krishhgg/Insomnia) by Krish
