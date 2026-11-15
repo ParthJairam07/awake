@@ -131,7 +131,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(text.contains("        type: boolean\n        default: false\n"), "a manual run publishes nothing unless asked")
         XCTAssertFalse(text.contains("pull_request"), "never runs for pull requests")
         XCTAssertTrue(text.contains("permissions: {}"), "nothing at the top level")
-        XCTAssertEqual(Set(try releaseJobs().keys), ["plan", "build", "stable", "nightly"])
+        XCTAssertEqual(Set(try releaseJobs().keys), ["plan", "build", "stable", "cask", "nightly"])
 
         let plan = try job("plan").joined(separator: "\n")
         XCTAssertTrue(plan.contains(#"if [[ "$NIGHTLY_INPUT" != true ]]; then\#n                printf 'channel=artifact\nbuild=true\n' >> "$GITHUB_OUTPUT""#), "a manual run without the input only builds")
@@ -364,7 +364,7 @@ final class ReleaseWorkflowTests: XCTestCase {
     /// skips them and still packages an ad-hoc build. The keychain is
     /// removed even when a later step fails.
     func testSigningSecretsAreOptionalAndOnlyTheBuildJobReadsThem() throws {
-        for (id, body) in try releaseJobs() where id != "build" {
+        for (id, body) in try releaseJobs() where id != "build" && id != "cask" {
             XCTAssertFalse(body.joined(separator: "\n").contains("secrets."), "the \(id) job reads a secret")
         }
         let build = try job("build")
@@ -455,6 +455,53 @@ final class ReleaseWorkflowTests: XCTestCase {
         let plist = try XCTUnwrap(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
         XCTAssertEqual(plist["com.apple.security.personal-information.location"] as? Bool, true)
         XCTAssertEqual(Set(plist.keys), ["com.apple.security.personal-information.location"])
+    }
+
+    /// After a stable release, and only then, the cask job rewrites the
+    /// cask's version and checksum from the release's SHA256SUMS and
+    /// commits that one file to the `homebrew` branch through the contents
+    /// API: main is never written, nothing is pushed with git, and the
+    /// checkout keeps no credentials. The tap repository is updated only
+    /// when its token exists, and that token is the only secret the job
+    /// reads.
+    func testTheCaskJobCommitsOnlyTheCaskAndOnlyAfterAStableRelease() throws {
+        let body = try job("cask")
+        let text = body.joined(separator: "\n")
+        XCTAssertTrue(body.contains("    needs: [build, stable]"), "after the release exists")
+        XCTAssertTrue(body.contains("    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"), "for a pushed tag only")
+        XCTAssertEqual(try permissionScopes(body, job: "cask"), ["contents: write"])
+        XCTAssertTrue(text.contains("uses: actions/checkout@") && text.contains("          persist-credentials: false"), "the checkout keeps no token")
+        XCTAssertTrue(text.contains(#".github/scripts/update-cask.sh --version "$VERSION" --sha256 "$sum" --file Casks/awake.rb"#))
+        XCTAssertTrue(text.contains(#"sum="$(awk -v f="Awake-$VERSION.zip" '$2 == f { print $1 }' release/SHA256SUMS)""#), "the checksum of the zip the cask downloads")
+        XCTAssertTrue(text.contains("branch=homebrew"))
+        XCTAssertTrue(text.contains(#"gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/Casks/awake.rb""#))
+        XCTAssertFalse(text.contains("branch=main") || text.contains("refs/heads/main"), "main is never written")
+        let secretLines = body.filter { $0.contains("secrets.") }
+        XCTAssertEqual(secretLines.map { $0.trimmingCharacters(in: .whitespaces) },
+                       ["HAVE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}", "GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}"])
+        let tapStep = try XCTUnwrap(body.firstIndex(of: "      - name: Commit the cask to the tap repository"))
+        XCTAssertEqual(body[tapStep + 1], "        if: steps.tap.outputs.update == 'true'", "skipped without the token")
+    }
+
+    /// The cask in the repository is a template with the fields the cask
+    /// job rewrites, the release zip's URL, a livecheck and a zap stanza.
+    func testTheCaskNamesTheReleaseZipAndWhatZapRemoves() throws {
+        let cask = try String(contentsOf: repoRoot.appendingPathComponent("Casks/awake.rb"), encoding: .utf8)
+        for line in [
+            #"cask "awake" do"#,
+            ##"  url "https://github.com/ParthJairam07/awake/releases/download/v#{version}/Awake-#{version}.zip""##,
+            "  livecheck do", "    strategy :github_latest",
+            "  depends_on arch: :arm64", "  depends_on macos: :tahoe",
+            ##"  app "Awake.app", target: "#{Dir.home}/Applications/Awake.app""##,
+            #"  uninstall launchctl: "com.awake.backstop","#, #"            quit:      "com.parthjairam.awake""#,
+            #"  zap delete: "/etc/sudoers.d/awake","#,
+            #"        "~/Library/Application Support/Awake","#, #"        "~/Library/LaunchAgents/com.awake.backstop.plist","#, #"        "~/Library/Logs/Awake","#,
+        ] {
+            XCTAssertTrue(lines(cask).contains(line), "Casks/awake.rb lacks: \(line)")
+        }
+        XCTAssertEqual(lines(cask).filter { $0.range(of: #"^  version "[^"]*"$"#, options: .regularExpression) != nil }.count, 1)
+        XCTAssertEqual(lines(cask).filter { $0.range(of: #"^  sha256 "[0-9a-f]{64}"$"#, options: .regularExpression) != nil }.count, 1)
+        XCTAssertFalse(cask.contains("auto_updates"), "an unsigned build does not update itself, so brew must keep upgrading it")
     }
 
     private func packageScript() throws -> String {

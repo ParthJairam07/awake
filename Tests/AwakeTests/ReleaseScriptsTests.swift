@@ -367,6 +367,42 @@ final class ReleaseScriptsTests: XCTestCase {
         XCTAssertFalse(exists())
     }
 
+    // MARK: - update-cask.sh
+
+    /// The cask job's rewrite: the version and the checksum change, every
+    /// other line stays, and a file without exactly one of each line, a
+    /// version that is not three numbers or a checksum that is not a
+    /// SHA-256 changes nothing.
+    func testUpdateCaskRewritesOnlyTheVersionAndTheChecksum() throws {
+        let script = Self.repoRoot.appendingPathComponent(".github/scripts/update-cask.sh")
+        let original = try String(contentsOf: Self.repoRoot.appendingPathComponent("Casks/awake.rb"), encoding: .utf8)
+        let cask = scratch.appendingPathComponent("awake.rb")
+        try original.write(to: cask, atomically: true, encoding: .utf8)
+        let sum = String(repeating: "ab", count: 32)
+
+        var r = try run([script.path, "--version", "1.2.3", "--sha256", sum, "--file", cask.path])
+        XCTAssertEqual(r.status, 0, r.output)
+        let updated = try String(contentsOf: cask, encoding: .utf8)
+        let before = original.components(separatedBy: "\n")
+        let after = updated.components(separatedBy: "\n")
+        XCTAssertEqual(before.count, after.count)
+        let changed = zip(before, after).filter { $0 != $1 }.map(\.1)
+        XCTAssertEqual(changed, [#"  version "1.2.3""#, "  sha256 \"\(sum)\""])
+
+        for (version, checksum) in [("1.2", sum), ("v1.2.3", sum), ("1.2.3", "abc"), ("1.2.3", sum.uppercased()), ("1.2.3\"; system \"x", sum)] {
+            r = try run([script.path, "--version", version, "--sha256", checksum, "--file", cask.path])
+            XCTAssertEqual(r.status, 2, "\(version) \(checksum): \(r.output)")
+        }
+        XCTAssertEqual(try String(contentsOf: cask, encoding: .utf8), updated)
+
+        let twice = updated + "  version \"9.9.9\"\n"
+        try twice.write(to: cask, atomically: true, encoding: .utf8)
+        r = try run([script.path, "--version", "2.0.0", "--sha256", sum, "--file", cask.path])
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("exactly one version line and one sha256 line"), r.output)
+        XCTAssertEqual(try String(contentsOf: cask, encoding: .utf8), twice, "nothing was changed")
+    }
+
     // MARK: - signing-keychain.sh
 
     /// Only the argument and environment checks: a real run creates a
