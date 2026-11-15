@@ -49,18 +49,25 @@ Still to do for phase 0: the real-Mac checklist of section 7 (lid close with and
 **Done:**
 
 - Every alert also goes to the phone: `PhoneAlerts` wraps the Mac notifier and forwards each post to the ntfy topic and/or Pushover account from Settings (tokens in the login keychain, service `awake-phone`), with one retry and one local "Phone alert failed" notice per launch. Telegram and a webhook are still to come.
-- Alert set today: battery, heat and weak-charger floors, Low Power Mode on/off, "Internet down" once an outage lasts the nudge threshold and "Internet back" / "Network recovered", "10 minutes left" (was 5, Mac-only), session ended, restore incomplete, screen not locked, memory pressure, disk almost full. Agent waiting/stalled/exited arrive with phase 2's registry; "pending OS restart" is deferred (no reliable public API).
-- **Session summary**: `report.json` tallies the session as it runs (lid closes, Low Power Mode and heat events, weak-charger spells, outages) and one "Session summary" notification at the end gives duration, reason, battery start→end and whether everything was restored; a report left by a session Awake did not see end is summarised at the next launch. Agents and unpushed repos join the summary in phase 2.
+- Alert set today: battery, heat and weak-charger floors, Low Power Mode on/off, "Internet down" once an outage lasts the nudge threshold and "Internet back" / "Network recovered", "10 minutes left" (was 5, Mac-only), session ended, restore incomplete, screen not locked, memory pressure, disk almost full. Agent waiting/stalled/exited arrived with phase 2; "pending OS restart" is deferred (no reliable public API).
+- **Session summary**: `report.json` tallies the session as it runs (lid closes, Low Power Mode and heat events, weak-charger spells, outages) and one "Session summary" notification at the end gives duration, reason, battery start→end and whether everything was restored; a report left by a session Awake did not see end is summarised at the next launch. Agents and unpushed repos joined it in phase 2.
 - `status.json` in Application Support on every change, served on `http://127.0.0.1:<port>/status.json` when a port is set (loopback only, off by default).
 
 ### 3.3 Phase 2: the Mac knows the agents (weeks 5–8)
 
-- **Agent registry**: find agent processes by bundle id or command line (Claude Code, Codex, Cursor, Aider, Devin CLI, Ollama, LM Studio), and tmux panes by user mark.
-- **Per-agent state**: alive, CPU, memory, last output age (tmux pane hash, log file mtime), waiting-for-input (prompt patterns + hook events), stalled (no change for N min), exited.
-- **Prompt and dialog detector**: Accessibility API for sheets and dialogs (Gatekeeper, TCC, keychain, sudo), text and buttons captured and sent to the phone.
-- **Hooks**: shipped configs for Claude Code (`Notification`, `Stop`) and Codex notify, posting to Awake's local endpoint.
-- **Pre-end hooks**: before a battery or heat end, send a save signal to agents and, opt-in, `git commit -am wip && git push` per repo.
-- **Priority**: pause low-priority agents first under battery, heat or memory pressure, with the same journaled, identity-checked SIGSTOP.
+**Done** (each with settings under Settings > Agents and unit tests over fakes; details in `docs/agents.md`):
+
+- **Agent registry** (`Sources/Awake/Agents`): Claude Code, Codex, Cursor, Aider, Devin CLI, Gemini CLI, Ollama and LM Studio by command line or bundle id over the existing process snapshot, plus tmux panes marked with `@awake` or an `awake:` title. Polled every 20 s and when the menu opens. Each agent is keyed by pid and start identity and carries its pids, tmux target, cwd, git repo, CPU %, RSS, first and last seen.
+- **Per-agent state** (`AgentStateMachine`, pure): alive, busy, idle, waitingForInput, stalled, exited, from CPU over time, the tmux pane's text (hash and prompt patterns on the last lines), Claude Code's transcript mtime and hook events. Stalled after `agentStallMinutes` (10) without output or a heartbeat, only where output can be seen.
+- **Hooks**: `POST /hooks/<kind>` on the loopback status port and on an owner-only Unix socket, `hooks.sock`, that works with the port off; `scripts/awake-hook.sh` (also installed into Application Support) posts to it. Configs for Claude Code (`Notification`, `Stop`, `SubagentStop`, `SessionEnd`, optional `PreToolUse`) and Codex `notify` are in `docs/agents.md`. Unmatched events create a hook-only agent.
+- **Alerts** through the same notifier as phase 1 (so also to the phone): Agent waiting, Agent stalled, Agent exited, once per transition, and All agents finished after `allDoneMinutes` (5).
+- **Dialog detector**: with the Accessibility permission, every 5 s during a session and only when nobody has touched the Mac for a minute, reads sheets, dialogs and system prompts (TCC, keychain, Gatekeeper) in the frontmost and agent apps and posts "Dialog blocking" once per dialog with its text and buttons. Never clicks. `sudo` in a terminal is caught as a tmux prompt.
+- **Menu and status**: one line per agent in the menu; `status.json` gains `agents`.
+- **Session summary**: agents that ran, finished, stalled or were waiting at the end, repos with unpushed commits, and the result of the wip save.
+- **Pre-end hooks** (opt-in): before a battery, heat or planned end, the intent is journaled to `pre-end.json`, "Session ending" is posted and, with `wipCommitOnEnd`, each agent repo gets `git add -A`, a commit and a push, 60 s per repo, never forced.
+- **Priority pause** (opt-in): under the Low Power Mode floor, heat or critical memory pressure, the lowest-priority agents are paused first, one priority a minute and never the highest present, with the same journaled, identity-checked SIGSTOP as a lid-close freeze, and resumed in the same order when it clears. Never an agent at a sudo prompt or with sudo running under it.
+
+Still to do for phase 2: the real-Mac check (real Claude Code and Codex sessions with the hooks installed, a real permission dialog with Accessibility allowed, a real wip push), recorded in `docs/release-validation.md`.
 
 ### 3.4 Phase 3: the phone controls the Mac (weeks 9–12)
 

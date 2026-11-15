@@ -25,18 +25,19 @@ The first list is the goal; the items marked *(today)* work now, the rest are pl
 **On the Mac**
 - Keeps the Mac awake for a fixed time, never forever, with a recovery journal so everything is undone even after a crash. *(today)*
 - On lid close: darkens the screen, mutes audio, freezes chat apps, turns on Low Power Mode, and undoes all of it on lid open. Battery and heat floors end the session before the Mac gets into trouble. *(today)*
-- Knows each agent: alive, busy, idle, stalled, or waiting for input.
-- Detects pop-ups and prompts that block agents (Gatekeeper, permission dialogs, "proceed? (y/n)", 2FA) and reports their text.
+- Knows each agent (Claude Code, Codex, Cursor, Aider, Devin, Gemini, Ollama, LM Studio, any tmux pane you mark): alive, busy, idle, stalled, waiting for input, or exited, one line each in the menu. *(today)* See [docs/agents.md](docs/agents.md).
+- Detects pop-ups and prompts that block agents (Gatekeeper, permission dialogs, the keychain, "proceed? (y/n)" in a tmux pane) and reports their text and buttons. *(today; dialogs need the Accessibility permission)*
+- Opt-in: before a battery, heat or planned end, commits and pushes work in progress in each agent repo; under battery, heat or memory pressure, pauses the lowest-priority agents first. *(today, both off by default)*
 - Watches the battery trend (a charger too weak for the load counts as no charger), battery temperature where the Mac reports one, CPU throttling, memory pressure, free disk, and real internet reachability (not just "Wi-Fi connected"). *(today)*
 - Locks the screen on lid close. Leaves you alone when an external monitor is attached. *(today)*
 - Lets agents ask for awake time themselves: a **lease** per task, released when done. The Mac stays awake while any lease is held, capped by a limit you set.
 
 **On the phone**
-- Push alerts for the things that matter: battery or heat, weak charger, internet down and back, session ending in 10 minutes, session ended, something not restored, disk or memory trouble; via ntfy or Pushover, tokens in your keychain. *(today)* Agent waiting/stalled alerts come with the agent layer.
+- Push alerts for the things that matter: battery or heat, weak charger, internet down and back, session ending in 10 minutes, session ended, something not restored, disk or memory trouble; via ntfy or Pushover, tokens in your keychain. *(today)* Agent waiting, stalled and exited, "All agents finished" and "Dialog blocking" too. *(today)*
 - One screen per agent, one tap to answer a prompt, nudge, pause, or stop it.
 - Extend or end the session, lock the screen, take a screenshot, commit and push a repo.
-- A summary when the session ends: how long it ran, why it ended, battery used, lid closes, Low Power Mode and heat events, outages, whether everything was restored. *(today)* Agents and unpushed repos join it with the agent layer.
-- `status.json` and a local `http://127.0.0.1:<port>/status.json` for Raycast or SketchyBar. *(today)*
+- A summary when the session ends: how long it ran, why it ended, battery used, lid closes, Low Power Mode and heat events, outages, whether everything was restored. *(today)* It also lists the agents that ran, finished, stalled or were waiting at the end, and repos with unpushed commits. *(today)*
+- `status.json` and a local `http://127.0.0.1:<port>/status.json` for Raycast or SketchyBar, with an `agents` array. *(today)*
 
 ## Principles
 
@@ -196,6 +197,20 @@ Some things need you:
 
 If the menu shows a recovery warning, deal with it before you leave the Mac
 alone. [docs/recovery.md](docs/recovery.md) explains each case.
+
+## Agents
+
+Settings > Agents (details, hook configs and how each state is decided: [docs/agents.md](docs/agents.md)):
+
+- **Track AI coding agents during a session** (on): finds agents by process and marked tmux panes (`tmux set-option -p @awake 1`) every 20 seconds, and takes hook events.
+- **Show agents in the menu** (on): one line per agent in the menu bar menu, such as `● claude  busy  3m  repo-name`.
+- **Alert when an agent waits for input / stalls / exits** (each on): one notification per change, also sent to the phone.
+- **Stalled after** (10 min): silence after which a working agent counts as stalled.
+- **Alert when all agents have finished** (on) and **All finished after** (5 min): one notice once every command-line agent has been idle or gone that long.
+- **Install hook script**: writes `~/Library/Application Support/Awake/awake-hook.sh`, which Claude Code hooks and Codex `notify` call to say "waiting" or "finished" themselves.
+- **Alert on dialogs and permission prompts that block an app** (on) with **Allow Accessibility…**: reads sheets, dialogs and system prompts through the Accessibility API once you allow Awake under Privacy & Security > Accessibility; nothing is read before that, and nothing is ever clicked.
+- **Before a battery, heat or planned end, post "Session ending"** (off) and **Also commit and push work in progress in each agent repo** (off): `git add -A`, commit and push per repo, 60 s each, never forced.
+- **Pause low-priority agents under battery, heat or memory pressure** (off), with a Low / Normal / High priority per agent kind: lowest first, never the highest priority running, resumed when the pressure clears.
 
 ## Optional extras
 
