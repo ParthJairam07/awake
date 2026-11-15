@@ -418,6 +418,10 @@ final class SessionManager {
     /// then, so the value journaled at a later lid close is the user's,
     /// not the mode's rescaled one. nil in tests that do not wire it.
     var willEnableLowPower: (@MainActor () -> Void)?
+    /// Phase 2: what runs before a battery, heat or planned end when
+    /// `Config.preEndHooks` is on (`PreEndRunner`). Set by AppServices for
+    /// the running session.
+    @ObservationIgnored var preEnd: (@MainActor (EndReason) async -> Void)?
     /// Called with each brightness level known to be the user's: a value
     /// written from the journal, and the reading that finds a kept value
     /// set since. `AppServices` gives it to the sampler, which does not
@@ -1501,6 +1505,14 @@ final class SessionManager {
         notifier.post(title: Self.endTitle(reason, had: had), body: endBody(reason, waiting: waiting))
         postSummary(reason: reason, restored: true)
         return .restored
+    }
+
+    /// Phase 2: the opt-in work before a floor or planned end. Does
+    /// nothing with the setting off, outside a session, or before
+    /// AppServices has set the hook.
+    func runPreEnd(_ reason: EndReason) async {
+        guard config.preEndHooks, session != nil, let preEnd else { return }
+        await preEnd(reason)
     }
 
     // MARK: Session report (phase 1)
@@ -3038,6 +3050,12 @@ final class SessionManager {
             // spinning the run loop.
             scheduleDeadlineTimer(fire: Date().addingTimeInterval(max(remaining, 0.05)))
             return
+        }
+        if config.preEndHooks, preEnd != nil {
+            await runPreEnd(.timer)
+            // The save takes time. A session ended meanwhile is gone, and
+            // one extended meanwhile has a new deadline and its own timer.
+            guard let current = session, current.endsAt.timeIntervalSince(clock()) <= 0 else { return }
         }
         await end(reason: .timer)
     }

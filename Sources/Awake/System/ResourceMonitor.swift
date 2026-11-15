@@ -75,6 +75,9 @@ final class ResourceMonitor {
     private var pressureSource: (any DispatchSourceMemoryPressure)?
     private var diskTimer: (any DispatchSourceTimer)?
     private(set) var running = false
+    /// Phase 2: every pressure event while started, whatever the alert
+    /// setting says; the priority pause listens.
+    var onMemoryPressure: (@MainActor (ResourceRules.MemoryPressure) -> Void)?
 
     init(
         notifier: any Notifying,
@@ -133,7 +136,9 @@ final class ResourceMonitor {
 
     /// One pressure event; the source calls this, and tests call it directly.
     func memoryPressure(_ level: ResourceRules.MemoryPressure) {
-        guard running, configProvider().resourceAlerts else { return }
+        guard running else { return }
+        onMemoryPressure?(level)
+        guard configProvider().resourceAlerts else { return }
         if level != .normal { Log.info("memory pressure \(level)") }
         if let body = state.memory(level) {
             notifier.post(title: "Memory pressure critical", body: body)

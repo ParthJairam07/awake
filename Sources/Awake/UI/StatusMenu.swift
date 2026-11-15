@@ -43,6 +43,8 @@ enum StatusMenu {
     /// `relaunchProblems` say why browser relaunches did not happen, one
     /// line per browser; they follow the browser lines, since the browsers
     /// they name may no longer be in them.
+    /// `agents` are the agent lines (`AgentLines.menuLines`), shown after
+    /// the machine and action lines.
     /// `outputsWaiting` are output devices still muted from a lid close
     /// because they were not connected to get their volume back; each gets
     /// a line and an item to stop waiting for it.
@@ -51,6 +53,7 @@ enum StatusMenu {
         sleepHeld: Bool,
         machine: String?,
         actions: String?,
+        agents: [String] = [],
         throttledBrowsers: [ThrottledBrowser],
         relaunchProblems: [String] = [],
         hotspotWarning: String? = nil,
@@ -69,6 +72,10 @@ enum StatusMenu {
         }
         if let actions = present(actions) {
             out.append(Item(title: actions, kind: .info))
+        }
+        // Phase 2: one compact line per tracked agent.
+        for agent in agents.compactMap(present) {
+            out.append(Item(title: agent, kind: .info))
         }
         if lidSimulationBuild {
             out.append(Item(title: LidSimulationBuild.marker, kind: .warning))

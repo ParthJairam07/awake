@@ -25,6 +25,11 @@ struct SettingsView: View {
     /// Names of the apps the automatic lid-close scope would freeze right
     /// now (the freeze list excluded); refreshed on appear and toggle.
     @State private var wouldFreeze: [String] = []
+    /// Phase 2: whether macOS lets Awake read dialogs, re-read when the
+    /// window appears and when the app becomes active again.
+    @State private var accessibilityTrusted = AXDialogProbe().isTrusted()
+    /// What "Install hook script" did.
+    @State private var hookNotice: String?
 
     var body: some View {
         Form {
@@ -34,6 +39,7 @@ struct SettingsView: View {
             powerSection
             networkSection
             phoneSection
+            agentsSection
             appSection
         }
         .formStyle(.grouped)
@@ -552,6 +558,94 @@ struct SettingsView: View {
             Text("Phone alerts")
         }
         .task { await phone.load(from: phoneSecrets) }
+    }
+
+    // MARK: Agents (phase 2)
+
+    private var stallMinutes: Binding<Int> {
+        Binding(get: { manager.config.agentStallMinutes }, set: { v in update { $0.agentStallMinutes = min(max(1, v), 240) } })
+    }
+
+    private var allDoneMinutes: Binding<Int> {
+        Binding(get: { manager.config.allDoneMinutes }, set: { v in update { $0.allDoneMinutes = min(max(1, v), 240) } })
+    }
+
+    private func priority(of kind: AgentKind) -> Binding<Int> {
+        Binding(
+            get: { manager.config.agentPriorities[kind.rawValue] ?? PausePlanner.normal },
+            set: { v in update { $0.agentPriorities[kind.rawValue] = v == PausePlanner.normal ? nil : v } }
+        )
+    }
+
+    /// The kinds a priority can be set for: the ones with a process.
+    static let priorityKinds: [AgentKind] = AgentKind.allCases.filter { $0 != .hookOnly }
+
+    private var agentsSection: some View {
+        Section {
+            Toggle("Track AI coding agents during a session", isOn: bind(\.agentTracking))
+            Text("Finds Claude Code, Codex, Cursor, Aider, Devin, Gemini, Ollama and LM Studio by their processes, and any tmux pane you mark with: \(TmuxPaneList.markCommand)")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Toggle("Show agents in the menu", isOn: bind(\.showAgentsInMenu))
+            Toggle("Alert when an agent waits for input", isOn: bind(\.agentWaitingAlerts))
+            Toggle("Alert when an agent stalls", isOn: bind(\.agentStalledAlerts))
+            Stepper(value: stallMinutes, in: 1...240, step: 1) {
+                LabeledContent("Stalled after", value: "\(manager.config.agentStallMinutes) min without output")
+            }
+            Toggle("Alert when an agent exits", isOn: bind(\.agentExitedAlerts))
+            Toggle("Alert when all agents have finished", isOn: bind(\.allDoneAlert))
+            Stepper(value: allDoneMinutes, in: 1...240, step: 1) {
+                LabeledContent("All finished after", value: "\(manager.config.allDoneMinutes) min idle or gone")
+            }
+            HStack {
+                Button("Install hook script") {
+                    hookNotice = HookScript.install(paths: manager.paths).map { "Installed at \($0.path). The hook configs for Claude Code and Codex are in docs/agents.md." }
+                        ?? "Could not write the hook script; see awake.log."
+                }
+                Spacer()
+            }
+            Text(hookNotice ?? "Hooks let an agent say itself that it waits or has finished. The script is also written when a session starts.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+            Toggle("Alert on dialogs and permission prompts that block an app", isOn: bind(\.dialogAlerts))
+            HStack {
+                Text(DialogRules.permissionStatus(trusted: accessibilityTrusted))
+                    .font(.caption)
+                    .foregroundStyle(accessibilityTrusted ? Color.secondary : Color.orange)
+                Spacer()
+                Button(accessibilityTrusted ? "Open Accessibility settings" : "Allow Accessibility\u{2026}") {
+                    if !accessibilityTrusted { AXDialogProbe().requestTrust() }
+                    NSWorkspace.shared.open(AXDialogProbe.settingsURL)
+                }
+            }
+            Toggle("Before a battery, heat or planned end, post \"Session ending\"", isOn: bind(\.preEndHooks))
+            Toggle("Also commit and push work in progress in each agent repo", isOn: bind(\.wipCommitOnEnd))
+                .disabled(!manager.config.preEndHooks)
+            Text("Runs git add -A, git commit -m \"\(AgentGit.wipMessage)\" and git push in each repo an agent works in, on the branch that is checked out, up to \(Int(AgentGit.wipTimeout)) s per repo. Never forces, never uses sudo. Both are off by default.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Toggle("Pause low-priority agents under battery, heat or memory pressure", isOn: bind(\.priorityPause))
+            if manager.config.priorityPause {
+                ForEach(Self.priorityKinds, id: \.self) { kind in
+                    Picker(kind.displayName, selection: priority(of: kind)) {
+                        Text("Low").tag(PausePlanner.low)
+                        Text("Normal").tag(PausePlanner.normal)
+                        Text("High").tag(PausePlanner.high)
+                    }
+                }
+            }
+            Text("Below the Low Power Mode floor, when the Mac is hot, or under critical memory pressure, agents are paused lowest priority first, one priority a minute, and never the highest priority running; they resume when it clears. With every agent at the same priority nothing is paused. An agent at a sudo prompt is never paused.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        } header: {
+            Text("Agents")
+        }
+        .onAppear { accessibilityTrusted = AXDialogProbe().isTrusted() }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
+            accessibilityTrusted = AXDialogProbe().isTrusted()
+        }
     }
 
     private var appSection: some View {

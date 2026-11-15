@@ -218,6 +218,8 @@ struct FloorRuleDriver {
                     }
                 }
             case let .endSession(reason):
+                await manager.runPreEnd(reason)
+                guard manager.isActive, !Task.isCancelled else { return }
                 await manager.end(reason: reason)
                 guard manager.isActive, !Task.isCancelled else { return }
             }

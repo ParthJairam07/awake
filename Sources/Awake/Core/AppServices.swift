@@ -37,6 +37,8 @@ final class SystemStatus {
     /// was skipped for want of a readable password, and for which SSID.
     /// The menu shows it while that SSID is the one configured.
     var hotspotPasswordReport: HotspotPasswordReport?
+    /// Phase 2: the agents tracked this session, oldest first.
+    var agents: [AgentStatus] = []
 
     @ObservationIgnored var refresher: (@MainActor () async -> Void)?
 
@@ -199,6 +201,7 @@ final class AppServices {
         powerChanged()
 
         let res = ResourceMonitor(notifier: notifier, diskReader: freeDisk) { [weak manager] in manager?.config ?? Config() }
+        res.onMemoryPressure = { [weak self] level in self?.memoryPressureChanged(level) }
         res.start()
         resources = res
         statusServer.start(port: manager.config.statusPort)
@@ -222,6 +225,7 @@ final class AppServices {
         }
 
         browserTasks.append(Task { await self.refreshBrowsers() })
+        startAgents(for: manager)
         syncState()
     }
 
@@ -256,6 +260,7 @@ final class AppServices {
         status.hotspotPasswordReport = nil
         lidActions = nil
         floors = nil
+        stopAgents()
         syncState()
     }
 
@@ -278,7 +283,8 @@ final class AppServices {
             wifiSSID: status.wifiSSID,
             lastOutageSeconds: status.lastGap.map { Int($0) },
             frozenCount: status.frozenCount,
-            dockerPaused: status.dockerPaused
+            dockerPaused: status.dockerPaused,
+            agents: status.agents
         )
     }
 
@@ -330,6 +336,7 @@ final class AppServices {
     /// next opening, since the last two have to be awaited.
     func refreshOnDemand() async {
         refreshInstant()
+        Task { [weak self] in await self?.agentTracker?.poll() }
         status.wifiSSID = await currentSSID()
         await refreshBrowsers()
     }
@@ -568,6 +575,7 @@ final class AppServices {
             self.syncState()
         }
         floorTasks.append(task)
+        updateAgentPressure()
     }
 
     private func syncPower() {
@@ -596,6 +604,126 @@ final class AppServices {
         if let network { return await network.currentSSID() }
         let probe = NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { Config() }
         return await probe.currentSSID()
+    }
+
+    // MARK: Phase 2: agents
+
+    /// The system side of the agent features, replaceable in tests.
+    struct AgentDependencies {
+        var probe: any AgentProcessProbing = LiveAgentProbe()
+        var tmux: any TmuxReading = LiveTmuxReader()
+        var git = AgentGit()
+        var dialogs: any DialogProbing = AXDialogProbe()
+        var idleSeconds: @Sendable () -> Double = { UserInput.secondsSinceLastInput() }
+        var frontmostPid: @MainActor () -> Int32? = { DialogRules.frontmostPid() }
+        var runningApps: @MainActor () -> [RunningApp] = { Freezer.runningApps() }
+        /// False keeps the Unix socket closed (tests whose temp directory
+        /// is too deep for a socket path).
+        var hookSocket = true
+    }
+
+    var agentDependencies = AgentDependencies()
+    private(set) var agentTracker: AgentTracker?
+    private(set) var dialogWatcher: DialogWatcher?
+    private(set) var preEnd: PreEndRunner?
+    private(set) var agentPauser: AgentPauser?
+    private let hookSocket = HookSocketServer()
+    private var memoryCritical = false
+
+    /// Called by `start`: the registry, the hook endpoints, the dialog
+    /// detector, the pre-end save and the priority pause, all for the
+    /// session that just started. Each checks its own setting when it
+    /// acts, so a toggle in Settings applies without a restart.
+    func startAgents(for manager: SessionManager) {
+        let deps = agentDependencies
+        let config: @MainActor () -> Config = { [weak manager] in manager?.config ?? Config() }
+        let tracker = AgentTracker(probe: deps.probe, tmux: deps.tmux, notifier: notifier, git: deps.git, config: config)
+        tracker.onChange = { [weak self] statuses in
+            guard let self, self.running else { return }
+            self.status.agents = statuses
+            self.writeStatus()
+            self.updateAgentPressure()
+        }
+        tracker.onReport = { [weak manager] change in manager?.noteReport(change) }
+        agentTracker = tracker
+        tracker.start()
+
+        if manager.config.agentTracking {
+            HookScript.install(paths: paths)
+        }
+        if deps.hookSocket {
+            hookSocket.start(path: paths.hooksSocket.path) { [weak self] event in
+                Task { @MainActor in self?.agentTracker?.ingest(hook: event) }
+            }
+        }
+        statusServer.onHook = { [weak self] event in self?.agentTracker?.ingest(hook: event) }
+
+        let watcher = DialogWatcher(probe: deps.dialogs, notifier: notifier, idleSeconds: deps.idleSeconds, config: config) { [weak self, weak manager] in
+            DialogRules.targets(
+                apps: deps.runningApps(),
+                frontmostPid: deps.frontmostPid(),
+                agentBundleIds: Set(manager?.config.agentList ?? []),
+                agentPids: Set(self?.agentTracker?.agents.compactMap(\.rootPid) ?? [])
+            )
+        }
+        watcher.start()
+        dialogWatcher = watcher
+
+        let runner = PreEndRunner(paths: paths, notifier: notifier, git: deps.git, config: config) { [weak self] in
+            self?.agentTracker?.repos ?? []
+        }
+        runner.onReport = { [weak manager] change in manager?.noteReport(change) }
+        runner.settleLeftover()
+        preEnd = runner
+        manager.preEnd = { [weak self] reason in
+            await self?.preEnd?.run(reason: reason)
+            // The pushes change what is unpushed; the summary reads this.
+            await self?.agentTracker?.refreshUnpushed()
+        }
+
+        agentPauser = AgentPauser(manager: manager, freezer: freezer, notifier: notifier) { [weak self] in
+            self?.agentTracker?.agents ?? []
+        }
+        memoryCritical = false
+    }
+
+    /// Called by `stop`. Stops journaled by the priority pause are resumed
+    /// by the end that called this, from the journal, like any freeze.
+    func stopAgents() {
+        agentTracker?.stop()
+        agentTracker = nil
+        hookSocket.stop()
+        statusServer.onHook = nil
+        dialogWatcher?.stop()
+        dialogWatcher = nil
+        manager?.preEnd = nil
+        preEnd = nil
+        agentPauser?.stop()
+        agentPauser = nil
+        memoryCritical = false
+        status.agents = []
+    }
+
+    private func memoryPressureChanged(_ level: ResourceRules.MemoryPressure) {
+        memoryCritical = level == .critical
+        updateAgentPressure()
+    }
+
+    /// Hand the priority pause the pressure as it is now: the battery
+    /// under the Low Power Mode floor, heat, or critical memory.
+    private func updateAgentPressure() {
+        guard running, let pauser = agentPauser, let manager else { return }
+        let cause = FloorRules.lowPowerCause(
+            percent: power.percent,
+            isCharging: power.isCharging,
+            thermal: power.thermalState,
+            lidClosed: false,
+            config: manager.config,
+            chargerDraining: power.chargerDraining,
+            thermalReading: power.thermalReading
+        )
+        let pressure = PausePlanner.pressure(lowPowerCause: cause, thermal: power.thermalState, memoryCritical: memoryCritical)
+        Task { @MainActor in await pauser.update(pressure: pressure) }
     }
 }
 

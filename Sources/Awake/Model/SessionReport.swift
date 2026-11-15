@@ -19,6 +19,14 @@ struct SessionReport: Codable, Equatable, Sendable {
     var batteryEnd: Int?
     var restored: Bool?
     var summaryPosted = false
+    // Phase 2. Optional so a report.json written before phase 2 decodes.
+    /// Agents tracked during the session, by agent id.
+    var agents: [String: AgentReportEntry]?
+    /// Commits not on the upstream, by repo path, at the last check.
+    var unpushed: [String: Int]?
+    /// Repos the pre-end wip save pushed, and the ones it could not.
+    var wipPushed: [String]?
+    var wipFailed: [String]?
 
     init(startedAt: Date, plannedEnd: Date, batteryStart: Int?) {
         self.startedAt = startedAt
@@ -56,6 +64,7 @@ struct SessionReport: Codable, Equatable, Sendable {
         case false?: parts.append("Some changes were NOT restored; see the Mac.")
         case nil: break
         }
+        parts.append(contentsOf: agentParts())
         return parts.joined(separator: " ")
     }
 
@@ -65,5 +74,54 @@ struct SessionReport: Codable, Equatable, Sendable {
         case 2: "twice"
         default: "\(n) times"
         }
+    }
+}
+
+/// What the summary keeps about one agent.
+struct AgentReportEntry: Codable, Equatable, Sendable {
+    var name: String
+    var repo: String?
+    var lastState: AgentState
+    /// It stalled, or waited for input, at some point.
+    var stalled = false
+    var waited = false
+
+    init(name: String, repo: String?, lastState: AgentState, stalled: Bool = false, waited: Bool = false) {
+        self.name = name
+        self.repo = repo
+        self.lastState = lastState
+        self.stalled = stalled
+        self.waited = waited
+    }
+}
+
+extension SessionReport {
+    /// "Agents: 3 ran, 2 finished, 1 stalled, 1 waiting for input at the
+    /// end. Unpushed commits: api (3). wip pushed: 2 repos, failed: 1."
+    func agentParts() -> [String] {
+        var parts: [String] = []
+        if let agents, !agents.isEmpty {
+            let all = Array(agents.values)
+            var counts = ["\(all.count) ran"]
+            let finished = all.filter { $0.lastState.isSettled }.count
+            if finished > 0 { counts.append("\(finished) finished") }
+            let stalled = all.filter(\.stalled).count
+            if stalled > 0 { counts.append("\(stalled) stalled") }
+            let waiting = all.filter { $0.lastState == .waitingForInput }.count
+            if waiting > 0 { counts.append("\(waiting) waiting for input at the end") }
+            parts.append("Agents: \(counts.joined(separator: ", ")).")
+        }
+        let behind = (unpushed ?? [:]).filter { $0.value > 0 }.sorted { $0.key < $1.key }
+        if !behind.isEmpty {
+            let list = behind.map { "\(GitRepoLocator.name(of: $0.key)) (\($0.value))" }.joined(separator: ", ")
+            parts.append("Unpushed commits: \(list).")
+        }
+        let pushed = wipPushed?.count ?? 0, failed = wipFailed?.count ?? 0
+        if pushed > 0 || failed > 0 {
+            var line = "wip pushed: \(pushed) repo\(pushed == 1 ? "" : "s")"
+            if failed > 0 { line += ", failed: \(failed)" }
+            parts.append(line + ".")
+        }
+        return parts
     }
 }

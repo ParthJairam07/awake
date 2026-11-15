@@ -683,6 +683,9 @@ final class StatusItemController: NSObject {
                 dockerPaused: status.dockerPaused,
                 lastGap: status.lastGap
             ),
+            agents: manager.isActive && manager.config.showAgentsInMenu
+                ? AgentLines.menuLines(manager.services?.status.agents ?? [], now: Date())
+                : [],
             throttledBrowsers: status.throttledBrowsers,
             relaunchProblems: status.relaunchProblems,
             // A report about an SSID edited away since is not shown.

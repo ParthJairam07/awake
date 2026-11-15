@@ -139,6 +139,41 @@ struct Config: Codable, Equatable, Sendable {
     /// after dismissal.
     var lidCloseDefaultsNotice: LidCloseDefaultsChange?
 
+    // Phase 2
+    /// Find running AI coding agents (processes, marked tmux panes, hook
+    /// events) during a session and track what each is doing.
+    var agentTracking: Bool = true
+    /// One notification per transition: an agent asks for input, goes
+    /// silent mid-work, or its process goes away.
+    var agentWaitingAlerts: Bool = true
+    var agentStalledAlerts: Bool = true
+    var agentExitedAlerts: Bool = true
+    /// "All agents finished" once every agent has been idle or gone for
+    /// `allDoneMinutes`.
+    var allDoneAlert: Bool = true
+    /// Minutes without output or a hook heartbeat after which a working
+    /// agent counts as stalled.
+    var agentStallMinutes: Int = 10
+    var allDoneMinutes: Int = 5
+    /// One line per agent in the menu bar menu.
+    var showAgentsInMenu: Bool = true
+    /// Report dialogs and permission prompts that block an app, read
+    /// through the Accessibility API. Does nothing until Awake is
+    /// allowed under Privacy & Security > Accessibility.
+    var dialogAlerts: Bool = true
+    /// Before a battery, heat or planned end: journal the intent and post
+    /// "Session ending". Off by default.
+    var preEndHooks: Bool = false
+    /// With `preEndHooks`: `git add -A`, commit and push in each agent
+    /// repo before the end. Off by default.
+    var wipCommitOnEnd: Bool = false
+    /// Under the Low Power Mode floor, heat or critical memory pressure,
+    /// pause the lowest-priority agents first. Off by default.
+    var priorityPause: Bool = false
+    /// Priority by agent kind or name (`claude`, `codex`, ...): below 0 is
+    /// low, 0 normal (the default for anything not listed), above 0 high.
+    var agentPriorities: [String: Int] = [:]
+
     static let defaultPresets: [TimeInterval] = [
         30 * 60,
         1 * 3600,
@@ -227,6 +262,20 @@ struct Config: Codable, Equatable, Sendable {
         tmuxNudgePressesEnter = try c.decodeIfPresent(Bool.self, forKey: .tmuxNudgePressesEnter) ?? d.tmuxNudgePressesEnter
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         launchAtLoginInstall = try c.decodeIfPresent(String.self, forKey: .launchAtLoginInstall)
+        // Phase 2
+        agentTracking = try c.decodeIfPresent(Bool.self, forKey: .agentTracking) ?? d.agentTracking
+        agentWaitingAlerts = try c.decodeIfPresent(Bool.self, forKey: .agentWaitingAlerts) ?? d.agentWaitingAlerts
+        agentStalledAlerts = try c.decodeIfPresent(Bool.self, forKey: .agentStalledAlerts) ?? d.agentStalledAlerts
+        agentExitedAlerts = try c.decodeIfPresent(Bool.self, forKey: .agentExitedAlerts) ?? d.agentExitedAlerts
+        allDoneAlert = try c.decodeIfPresent(Bool.self, forKey: .allDoneAlert) ?? d.allDoneAlert
+        agentStallMinutes = max(1, try c.decodeIfPresent(Int.self, forKey: .agentStallMinutes) ?? d.agentStallMinutes)
+        allDoneMinutes = max(1, try c.decodeIfPresent(Int.self, forKey: .allDoneMinutes) ?? d.allDoneMinutes)
+        showAgentsInMenu = try c.decodeIfPresent(Bool.self, forKey: .showAgentsInMenu) ?? d.showAgentsInMenu
+        dialogAlerts = try c.decodeIfPresent(Bool.self, forKey: .dialogAlerts) ?? d.dialogAlerts
+        preEndHooks = try c.decodeIfPresent(Bool.self, forKey: .preEndHooks) ?? d.preEndHooks
+        wipCommitOnEnd = try c.decodeIfPresent(Bool.self, forKey: .wipCommitOnEnd) ?? d.wipCommitOnEnd
+        priorityPause = try c.decodeIfPresent(Bool.self, forKey: .priorityPause) ?? d.priorityPause
+        agentPriorities = try c.decodeIfPresent([String: Int].self, forKey: .agentPriorities) ?? d.agentPriorities
     }
 }
 
