@@ -121,6 +121,10 @@ What needs the https address from `tailscale serve`:
   *Port* in Settings and, if you use it, rerun `tailscale serve --bg`
   with the new port.
 - The phone says *not paired* after working before: its token was
-  forgotten on the Mac, or the browser's storage was cleared. Pair again.
+  forgotten on the Mac, the browser's storage was cleared, or Awake was
+  reinstalled. An unsigned (ad-hoc) install has a new identity each time,
+  and the keychain does not let the new build read the record the old one
+  saved; Settings then says the paired phones were saved by another build.
+  Pair again; macOS may ask to allow Awake to replace the old item.
 - The phone shows *offline*: check that Tailscale is connected on the
   phone and that Awake is running on the Mac.

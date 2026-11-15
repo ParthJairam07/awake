@@ -305,6 +305,21 @@ final class PhoneAuthTests: XCTestCase {
         XCTAssertTrue(auth.storeProblem?.contains("another build's item") == true)
     }
 
+    func testAnotherBuildsKeychainItemIsNamedAndAFreshPairingReplacesIt() async {
+        let issued = PhoneToken.issue(name: "iPhone", now: Date())
+        let store = MemoryPhoneDeviceStore([issued.device])
+        store.failLoadStatus = errSecAuthFailed
+        let auth = make(store)
+        await auth.load()
+        XCTAssertNil(auth.authenticate(issued.token))
+        XCTAssertEqual(auth.storeProblem, "The paired phones were saved by another build of Awake, which this one cannot read. Pair the phone again.")
+        let window = auth.beginPairing()
+        guard case let .paired(token, _) = await auth.pair(code: window.code, name: "iPhone") else { return XCTFail("not paired") }
+        XCTAssertNotNil(auth.authenticate(token))
+        XCTAssertNil(auth.storeProblem)
+        XCTAssertEqual(store.stored.count, 1, "the unreadable record is replaced, not merged")
+    }
+
     func testDevicesSurviveAReload() async {
         let store = MemoryPhoneDeviceStore()
         let first = make(store)

@@ -52,7 +52,12 @@ final class PhoneAuth {
             storeProblem = nil
         } catch {
             devices = []
-            storeProblem = "The paired phones could not be read from the keychain (\(error.localizedDescription)). Pair the phone again."
+            // The usual cause: the record was saved by another build of
+            // Awake (each ad-hoc install has its own identity), which this
+            // build may not read without a keychain prompt.
+            storeProblem = (error as? KeychainError)?.isUnreadableWithoutPrompt == true
+                ? "The paired phones were saved by another build of Awake, which this one cannot read. Pair the phone again."
+                : "The paired phones could not be read from the keychain (\(error.localizedDescription)). Pair the phone again."
             Log.error("phone app: paired devices unreadable: \(error.localizedDescription)")
         }
         loaded = true

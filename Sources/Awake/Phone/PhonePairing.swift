@@ -222,6 +222,8 @@ final class MemoryPhoneDeviceStore: PhoneDeviceStoring, @unchecked Sendable {
     private var devices: [PhoneDevice]
     private var _saves = 0
     var failLoad: String?
+    /// A keychain status to fail the load with (another build's item).
+    var failLoadStatus: OSStatus?
     var failSave: String?
     var saves: Int { lock.withLock { _saves } }
     var stored: [PhoneDevice] { lock.withLock { devices } }
@@ -233,6 +235,7 @@ final class MemoryPhoneDeviceStore: PhoneDeviceStoring, @unchecked Sendable {
     init(_ devices: [PhoneDevice] = []) { self.devices = devices }
 
     func load() throws -> [PhoneDevice] {
+        if let failLoadStatus { throw KeychainError(status: failLoadStatus) }
         if let failLoad { throw Failure(errorDescription: failLoad) }
         return lock.withLock { devices }
     }
