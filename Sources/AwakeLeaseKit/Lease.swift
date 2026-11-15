@@ -70,6 +70,20 @@ public struct Lease: Codable, Equatable, Sendable, Identifiable {
         source = try c.decode(LeaseSource.self, forKey: .source)
     }
 
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(version, forKey: .version)
+        // Lower case, as in the file's name; UUID's own encoding is upper.
+        try c.encode(Lease.idText(id), forKey: .id)
+        try c.encode(owner, forKey: .owner)
+        try c.encode(reason, forKey: .reason)
+        try c.encode(createdAt, forKey: .createdAt)
+        try c.encode(expiresAt, forKey: .expiresAt)
+        try c.encodeIfPresent(until, forKey: .until)
+        try c.encode(graceSeconds, forKey: .graceSeconds)
+        try c.encode(source, forKey: .source)
+    }
+
     /// The file name is the id in lower case, so it reads the same in a
     /// shell, in `awake leases` and in the JSON.
     public var fileName: String { Lease.fileName(for: id) }

@@ -120,6 +120,8 @@ public struct LeaseStore: Sendable {
         /// oldest first. Not yet checked against the clock (`LeaseRules`).
         public var leases: [Lease] = []
         public var rejected: [Rejected] = []
+
+        public init() {}
     }
 
     /// Reads every `*.json` regular file in the directory. Dot files (the

@@ -23,7 +23,7 @@ let package = Package(
         ),
         .testTarget(
             name: "AwakeTests",
-            dependencies: ["Awake", "AwakeTestHome"],
+            dependencies: ["Awake", "AwakeLeaseKit", "AwakeTestHome"],
             path: "Tests/AwakeTests",
             swiftSettings: [
                 .swiftLanguageMode(.v6),
@@ -51,9 +51,9 @@ let package = Package(
             ]
         ),
         .testTarget(
-            name: "AwakeCLITests",
+            name: "AwakeLeaseTests",
             dependencies: ["awake-cli", "AwakeLeaseKit", "AwakeTestHome"],
-            path: "Tests/AwakeCLITests",
+            path: "Tests/AwakeLeaseTests",
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ]

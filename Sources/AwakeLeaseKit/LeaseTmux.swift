@@ -23,6 +23,14 @@ public enum LeaseTmux {
         public var socketPath: String
         public var command: String
 
+        public init(paneId: String, dead: Bool, pid: Int32, socketPath: String, command: String) {
+            self.paneId = paneId
+            self.dead = dead
+            self.pid = pid
+            self.socketPath = socketPath
+            self.command = command
+        }
+
         /// Something other than a shell is in the foreground of a live pane.
         public var isBusy: Bool {
             guard !dead else { return false }
