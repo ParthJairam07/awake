@@ -21,7 +21,7 @@ enum CommandLink {
 
         var message: String {
             needsPath
-                ? "Installed at \(link.path). If your shell does not find `awake`, add \(link.deletingLastPathComponent().path) to your PATH."
+                ? "Installed at \(link.path). If your shell does not find awake, add \(link.deletingLastPathComponent().path) to your PATH."
                 : "Installed at \(link.path)."
         }
     }
