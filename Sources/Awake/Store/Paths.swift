@@ -92,6 +92,13 @@ struct Paths: Sendable, Equatable {
     var reportFile: URL { appSupport.appendingPathComponent("report.json") }
     /// The menu's status as JSON for dashboards (phase 1).
     var statusFile: URL { appSupport.appendingPathComponent("status.json") }
+    /// Phase 2: the Unix-domain socket agent hooks post to (owner-only).
+    var hooksSocket: URL { appSupport.appendingPathComponent("hooks.sock") }
+    /// Phase 2: the hook script Awake installs for agent hook configs.
+    var hookScript: URL { appSupport.appendingPathComponent("awake-hook.sh") }
+    /// Phase 2: what a pre-end save set out to do and what came of it,
+    /// written before anything runs.
+    var preEndFile: URL { appSupport.appendingPathComponent("pre-end.json") }
 
     /// Both logs are owner-only and rotate to `<name>.1` past
     /// `OwnerOnly.maxLogBytes`; uninstall.sh --purge removes the `.1` too.

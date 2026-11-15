@@ -23,11 +23,39 @@ struct StatusSnapshot: Codable, Equatable, Sendable {
     var lastOutageSeconds: Int?
     var frozenCount: Int
     var dockerPaused: Bool
+    /// Phase 2: the agents Awake tracks, oldest first. Empty when agent
+    /// tracking is off or no session runs.
+    var agents: [AgentStatus] = []
 
     static func encode(_ s: StatusSnapshot) throws -> Data {
         let encoder = Store.makeEncoder()
         encoder.outputFormatting.insert(.sortedKeys)
         return try encoder.encode(s)
+    }
+}
+
+extension StatusSnapshot {
+    /// A status.json written before phase 2 has no `agents`; it decodes
+    /// with none.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        updatedAt = try c.decode(Date.self, forKey: .updatedAt)
+        active = try c.decode(Bool.self, forKey: .active)
+        startedAt = try c.decodeIfPresent(Date.self, forKey: .startedAt)
+        endsAt = try c.decodeIfPresent(Date.self, forKey: .endsAt)
+        remainingSeconds = try c.decodeIfPresent(Int.self, forKey: .remainingSeconds)
+        lidClosed = try c.decode(Bool.self, forKey: .lidClosed)
+        lidOnDesk = try c.decode(Bool.self, forKey: .lidOnDesk)
+        batteryPercent = try c.decodeIfPresent(Int.self, forKey: .batteryPercent)
+        isCharging = try c.decode(Bool.self, forKey: .isCharging)
+        chargerDraining = try c.decode(Bool.self, forKey: .chargerDraining)
+        thermalState = try c.decode(String.self, forKey: .thermalState)
+        lowPowerSetByUs = try c.decode(Bool.self, forKey: .lowPowerSetByUs)
+        wifiSSID = try c.decodeIfPresent(String.self, forKey: .wifiSSID)
+        lastOutageSeconds = try c.decodeIfPresent(Int.self, forKey: .lastOutageSeconds)
+        frozenCount = try c.decode(Int.self, forKey: .frozenCount)
+        dockerPaused = try c.decode(Bool.self, forKey: .dockerPaused)
+        agents = try c.decodeIfPresent([AgentStatus].self, forKey: .agents) ?? []
     }
 }
 
@@ -108,14 +136,36 @@ final class StatusServer {
         port = nil
     }
 
+    /// Phase 2: `POST /hooks/<kind>` on the same port hands the parsed
+    /// event here (`HookHTTP`). nil: hook posts are answered and dropped.
+    var onHook: (@MainActor (AgentHookEvent) -> Void)?
+
     private func serve(_ connection: NWConnection) {
         connection.start(queue: .main)
-        connection.receive(minimumIncompleteLength: 1, maximumLength: 8192) { [weak self] data, _, _, error in
+        receive(on: connection, buffered: Data())
+    }
+
+    /// Reads until the request is whole: a hook post carries a body that
+    /// may arrive after its head.
+    private func receive(on connection: NWConnection, buffered: Data) {
+        connection.receive(minimumIncompleteLength: 1, maximumLength: 16 * 1024) { [weak self] data, _, isComplete, error in
             Task { @MainActor in
                 guard let self else { connection.cancel(); return }
                 if error != nil { connection.cancel(); return }
-                let head = String(data: data ?? Data(), encoding: .utf8) ?? ""
-                let reply = StatusHTTP.respond(to: head, json: self.json)
+                var all = buffered
+                all.append(data ?? Data())
+                let reply: Data
+                switch HookHTTP.parse(all) {
+                case .needMore where !isComplete && !(data ?? Data()).isEmpty:
+                    self.receive(on: connection, buffered: all)
+                    return
+                case let .request(request) where HookHTTP.isHookPath(request.path):
+                    let handled = HookHTTP.handleHook(request, overTCP: true)
+                    if let event = handled.event { self.onHook?(event) }
+                    reply = handled.reply
+                default:
+                    reply = StatusHTTP.respond(to: String(data: all, encoding: .utf8) ?? "", json: self.json)
+                }
                 connection.send(content: reply, completion: .contentProcessed { _ in connection.cancel() })
             }
         }
