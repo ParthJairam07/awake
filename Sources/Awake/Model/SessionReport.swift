@@ -19,6 +19,11 @@ struct SessionReport: Codable, Equatable, Sendable {
     var batteryEnd: Int?
     var restored: Bool?
     var summaryPosted = false
+    /// Phase 4: leases held at some point in the session, and the most
+    /// held at once. Optional, so a report.json written by a build without
+    /// them still decodes.
+    var leasesGranted: Int?
+    var maxLeasesHeld: Int?
 
     init(startedAt: Date, plannedEnd: Date, batteryStart: Int?) {
         self.startedAt = startedAt
@@ -50,6 +55,10 @@ struct SessionReport: Codable, Equatable, Sendable {
         if chargerWeakEvents > 0 { parts.append("Charger too weak \(Self.times(chargerWeakEvents)).") }
         if outages > 0 {
             parts.append("\(outages) outage\(outages == 1 ? "" : "s"), \(FailoverMachine.humanGap(outageSeconds)) in all.")
+        }
+        if let granted = leasesGranted, granted > 0 {
+            let most = maxLeasesHeld.map { $0 > 1 ? ", \($0) at once" : "" } ?? ""
+            parts.append("\(granted) lease\(granted == 1 ? "" : "s") granted\(most).")
         }
         switch restored {
         case true?: parts.append("Everything restored.")

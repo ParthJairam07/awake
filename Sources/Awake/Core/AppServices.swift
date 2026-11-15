@@ -1,3 +1,4 @@
+import AwakeLeaseKit
 import Foundation
 import Observation
 
@@ -278,7 +279,8 @@ final class AppServices {
             wifiSSID: status.wifiSSID,
             lastOutageSeconds: status.lastGap.map { Int($0) },
             frozenCount: status.frozenCount,
-            dockerPaused: status.dockerPaused
+            dockerPaused: status.dockerPaused,
+            leases: leaseStatuses?(now) ?? []
         )
     }
 
@@ -597,6 +599,12 @@ final class AppServices {
         let probe = NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { Config() }
         return await probe.currentSSID()
     }
+
+    // MARK: Leases (phase 4)
+
+    /// The leases for `snapshot`, from the lease manager. Set by
+    /// `SessionManager.live()`.
+    var leaseStatuses: (@MainActor (Date) -> [LeaseStatus])?
 }
 
 extension BrightnessSampler {

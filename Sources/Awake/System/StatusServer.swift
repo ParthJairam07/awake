@@ -1,3 +1,4 @@
+import AwakeLeaseKit
 import Foundation
 import Network
 
@@ -23,6 +24,8 @@ struct StatusSnapshot: Codable, Equatable, Sendable {
     var lastOutageSeconds: Int?
     var frozenCount: Int
     var dockerPaused: Bool
+    /// Phase 4: the leases the app honours right now.
+    var leases: [LeaseStatus] = []
 
     static func encode(_ s: StatusSnapshot) throws -> Data {
         let encoder = Store.makeEncoder()

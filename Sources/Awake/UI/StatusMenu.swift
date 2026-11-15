@@ -46,6 +46,8 @@ enum StatusMenu {
     /// `outputsWaiting` are output devices still muted from a lid close
     /// because they were not connected to get their volume back; each gets
     /// a line and an item to stop waiting for it.
+    /// `leases` are the lease lines (`LeaseStatus.menuLines`), shown after
+    /// the machine's own lines.
     static func items(
         sessionActive: Bool,
         sleepHeld: Bool,
@@ -58,7 +60,8 @@ enum StatusMenu {
         commandRunning: String? = nil,
         foreignSleep: String? = nil,
         outputsWaiting: [SavedAudioOutput] = [],
-        lidSimulationBuild: Bool = false
+        lidSimulationBuild: Bool = false,
+        leases: [String] = []
     ) -> [Item] {
         var out: [Item] = []
         if let held = SleepHeldLine.line(sessionActive: sessionActive, sleepHeld: sleepHeld) {
@@ -69,6 +72,10 @@ enum StatusMenu {
         }
         if let actions = present(actions) {
             out.append(Item(title: actions, kind: .info))
+        }
+        // Phase 4: who is holding the Mac awake, and for how much longer.
+        for line in leases.compactMap(present) {
+            out.append(Item(title: line, kind: .info))
         }
         if lidSimulationBuild {
             out.append(Item(title: LidSimulationBuild.marker, kind: .warning))

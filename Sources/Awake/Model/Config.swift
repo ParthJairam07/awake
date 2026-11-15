@@ -139,6 +139,23 @@ struct Config: Codable, Equatable, Sendable {
     /// after dismissal.
     var lidCloseDefaultsNotice: LidCloseDefaultsChange?
 
+    // Phase 4: leases
+    /// Honour lease files in Application Support/Awake/leases. Off: the
+    /// files are left alone and hold nothing.
+    var leasesEnabled: Bool = true
+    /// Longest leases can keep the Mac awake: counted from a lease's own
+    /// creation, and from the first lease of a session for all of them
+    /// together. `maxDuration` still applies on top.
+    var leaseCapHours: Int = 8
+    /// How long a session that only leases are holding runs on after the
+    /// last one is released or expires.
+    var leaseGraceMinutes: Int = 5
+    /// A lease may start a session when none is running. Off: leases only
+    /// stretch a session you started.
+    var leasesMayStartSession: Bool = true
+    /// Post "Lease granted" and "Last lease released".
+    var leaseNotifications: Bool = true
+
     static let defaultPresets: [TimeInterval] = [
         30 * 60,
         1 * 3600,
@@ -227,6 +244,12 @@ struct Config: Codable, Equatable, Sendable {
         tmuxNudgePressesEnter = try c.decodeIfPresent(Bool.self, forKey: .tmuxNudgePressesEnter) ?? d.tmuxNudgePressesEnter
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         launchAtLoginInstall = try c.decodeIfPresent(String.self, forKey: .launchAtLoginInstall)
+        // Phase 4
+        leasesEnabled = try c.decodeIfPresent(Bool.self, forKey: .leasesEnabled) ?? d.leasesEnabled
+        leaseCapHours = try c.decodeIfPresent(Int.self, forKey: .leaseCapHours) ?? d.leaseCapHours
+        leaseGraceMinutes = try c.decodeIfPresent(Int.self, forKey: .leaseGraceMinutes) ?? d.leaseGraceMinutes
+        leasesMayStartSession = try c.decodeIfPresent(Bool.self, forKey: .leasesMayStartSession) ?? d.leasesMayStartSession
+        leaseNotifications = try c.decodeIfPresent(Bool.self, forKey: .leaseNotifications) ?? d.leaseNotifications
     }
 }
 
@@ -327,5 +350,22 @@ extension Config {
         }
         guard (lowPowerFloor, endFloor) != before else { return nil }
         return "battery floors corrected: lowPowerFloor \(before.0) -> \(lowPowerFloor), endFloor \(before.1) -> \(endFloor)"
+    }
+}
+
+// MARK: Leases (phase 4)
+
+extension Config {
+    static let leaseCapRange = 1...72
+    static let leaseGraceRange = 0...60
+
+    /// The cap in seconds, clamped to what Settings offers: a hand-edited
+    /// 0 or a negative number must not turn the cap off.
+    var leaseCapSeconds: TimeInterval {
+        TimeInterval(min(max(leaseCapHours, Config.leaseCapRange.lowerBound), Config.leaseCapRange.upperBound)) * 3600
+    }
+
+    var leaseGraceSeconds: TimeInterval {
+        TimeInterval(min(max(leaseGraceMinutes, Config.leaseGraceRange.lowerBound), Config.leaseGraceRange.upperBound)) * 60
     }
 }
