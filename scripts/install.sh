@@ -30,6 +30,19 @@
 #                                             zip to this repository. Nothing
 #                                             of this checkout is needed then;
 #                                             the zip carries this script.
+#   curl -fsSL https://raw.githubusercontent.com/ParthJairam07/awake/main/scripts/install.sh | bash
+#   ./install.sh --latest                    downloads the latest stable
+#                                             release (its zip, SHA256SUMS and
+#                                             install.sh), checks both files
+#                                             against SHA256SUMS, shows what
+#                                             will be installed and asks. On
+#                                             yes it runs the release's own
+#                                             install.sh with --app, so the
+#                                             install itself is the one
+#                                             above. Piped into bash there is
+#                                             no script file, so that is the
+#                                             only thing a piped run does
+#                                             (install_latest, below).
 # Either way the bundle is checked before the password prompt, so a bad build
 # or download changes nothing.
 set -euo pipefail
@@ -64,6 +77,15 @@ RM=/bin/rm
 RMDIR=/bin/rmdir
 MKTEMP=/usr/bin/mktemp
 MKDIR=/bin/mkdir
+CURL=/usr/bin/curl
+SHASUM=/usr/bin/shasum
+XATTR=/usr/bin/xattr
+BASH_BIN=/bin/bash
+# Where install_latest asks its questions. A piped run has the script on
+# standard input, so answers come from the terminal itself.
+TTY=/dev/tty
+# The releases of this repository; install_latest downloads from here only.
+RELEASES_URL=https://github.com/ParthJairam07/awake/releases
 LOCK_TIMEOUT_SECONDS=10
 # The limit for one call to sudo, pgrep, launchctl or codesign made while this
 # run holds the recovery lock (and for the sudoers check before it); see
@@ -73,6 +95,145 @@ CALL_TIMEOUT_SECONDS=30
 # What a prebuilt bundle (--app) must be.
 BUNDLE_ID=com.parthjairam.awake
 
+# Download the latest stable release and hand it to its own install.sh.
+# Nothing on the Mac changes before the user answers yes: the files go to a
+# private temporary folder that is removed on the way out.
+#
+# What the checks show: the zip and the installer match the SHA256SUMS
+# published with them, so the download is complete and unaltered since the
+# release was made. SHA256SUMS comes from the same place as the files, so it
+# does not show who built them; `gh attestation verify` does (README,
+# Install), and this function says so before it asks.
+LATEST_DIR=""
+latest_cleanup() { if [[ -n "$LATEST_DIR" ]]; then "$RM" -rf "$LATEST_DIR"; fi; }
+# One answer from the terminal: 0 for y or yes, 1 for anything else, 2 when
+# there is no terminal to ask.
+ask() { # question
+  local answer=""
+  if ! { : < "$TTY"; } 2>/dev/null; then return 2; fi
+  # The question goes to standard error, which a piped run still has on
+  # the terminal; the answer is read from the terminal itself.
+  printf '%s [y/N] ' "$1" >&2
+  IFS= read -r answer < "$TTY" || true
+  case "$answer" in
+    y|Y|yes|YES|Yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+fetch() { # url file
+  "$CURL" -fsSL --proto '=https' --tlsv1.2 --retry 2 -o "$2" "$1"
+}
+# The SHA-256 SHA256SUMS lists for a file name, or nothing.
+listed_sum() { # sums-file name
+  awk -v f="$2" '$2 == f { print $1; exit }' "$1"
+}
+install_latest() {
+  local arm64 final tag version zip name want got signature answer_rc rc
+  arm64="$("$SYSCTL" -n hw.optional.arm64 2>/dev/null || true)"
+  if [[ "$arm64" != 1 ]]; then
+    echo "Release builds of Awake run on Apple Silicon Macs only, and this Mac is not one. Build from a source checkout instead (README, Build from source). Nothing was changed." >&2
+    exit 1
+  fi
+  step "Looking up the latest stable release"
+  # GitHub answers /releases/latest with a redirect to /releases/tag/<tag>.
+  if ! final="$("$CURL" -fsSLI --proto '=https' --tlsv1.2 --retry 2 -o /dev/null -w '%{url_effective}' "$RELEASES_URL/latest")"; then
+    echo "could not reach $RELEASES_URL/latest. Nothing was changed." >&2
+    exit 1
+  fi
+  tag="${final##*/}"
+  if [[ "$final" != "$RELEASES_URL/tag/$tag" || ! "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    echo "$RELEASES_URL/latest did not lead to a release tagged v<major>.<minor>.<patch> (it led to '$final'). There may be no stable release yet. Nothing was changed." >&2
+    exit 1
+  fi
+  version="${tag#v}"
+  zip="Awake-$version.zip"
+  echo "Awake $version"
+
+  LATEST_DIR="$("$MKTEMP" -d "${TMPDIR:-/tmp}/awake-latest.XXXXXX")"
+  trap latest_cleanup EXIT
+  step "Downloading $zip, install.sh and SHA256SUMS"
+  for name in SHA256SUMS "$zip" install.sh; do
+    if ! fetch "$RELEASES_URL/download/$tag/$name" "$LATEST_DIR/$name"; then
+      echo "could not download $name of $tag. Nothing was changed." >&2
+      exit 1
+    fi
+  done
+  step "Checking the downloads against SHA256SUMS"
+  for name in "$zip" install.sh; do
+    want="$(listed_sum "$LATEST_DIR/SHA256SUMS" "$name")"
+    got="$("$SHASUM" -a 256 "$LATEST_DIR/$name" | awk '{ print $1 }')"
+    if [[ ! "$want" =~ ^[0-9a-f]{64}$ ]]; then
+      echo "SHA256SUMS of $tag does not list $name. Nothing was changed." >&2
+      exit 1
+    fi
+    if [[ "$want" != "$got" ]]; then
+      echo "$name does not match SHA256SUMS (expected $want, got $got): the download is damaged or was altered. Nothing was changed." >&2
+      exit 1
+    fi
+    echo "$name: OK"
+  done
+  "$MKDIR" "$LATEST_DIR/unpacked"
+  if ! "$DITTO" -x -k "$LATEST_DIR/$zip" "$LATEST_DIR/unpacked" || [[ ! -d "$LATEST_DIR/unpacked/Awake.app" ]]; then
+    echo "$zip does not unpack to Awake.app. Nothing was changed." >&2
+    exit 1
+  fi
+
+  # Ad-hoc means unsigned as far as macOS is concerned: Gatekeeper blocks a
+  # quarantined copy. Only said here; the installer itself never takes a
+  # signature as proof of origin.
+  signature="$("$CODESIGN" -dvv "$LATEST_DIR/unpacked/Awake.app" 2>&1 || true)"
+  UNSIGNED=0
+  if [[ "$signature" == *"Signature=adhoc"* || "$signature" != *"Authority=Developer ID Application"* ]]; then
+    UNSIGNED=1
+  fi
+  cat <<WHAT
+
+The downloads match the SHA256SUMS published with release $tag, so they are
+complete and unaltered. That file comes from the same place as the downloads;
+to check who built them, run 'gh attestation verify' as the release notes show.
+
+Installing Awake $version does three things:
+  1. copies Awake.app to $APP_DIR
+  2. installs a recovery agent (a launchd job, every minute) that undoes a
+     session if the app is gone
+  3. writes /etc/sudoers.d/awake, which lets your account run four pmset
+     commands without a password. This step asks for your password.
+WHAT
+  if (( UNSIGNED )); then
+    echo "This is an unsigned build: macOS may ask you to right-click Awake and choose Open the first time."
+  fi
+  echo
+  answer_rc=0
+  ask "Install Awake $version now?" || answer_rc=$?
+  if (( answer_rc == 2 )); then
+    echo "There is no terminal to ask on, and nothing is installed without your answer. Download the release and run its install.sh yourself (README, Install). Nothing was changed." >&2
+    exit 1
+  fi
+  if (( answer_rc != 0 )); then
+    echo "Nothing was installed and nothing was changed."
+    exit 0
+  fi
+  # A file a browser downloaded carries the quarantine flag; one curl
+  # downloaded does not. It is only ever removed from an unsigned build,
+  # which macOS would otherwise refuse to open, and only on a yes.
+  if (( UNSIGNED )) && "$XATTR" -p com.apple.quarantine "$LATEST_DIR/unpacked/Awake.app" >/dev/null 2>&1; then
+    if ask "This unsigned build carries the macOS quarantine flag, so macOS will refuse to open it. Remove the flag?"; then
+      "$XATTR" -dr com.apple.quarantine "$LATEST_DIR/unpacked/Awake.app"
+      echo "quarantine flag removed"
+    else
+      echo "quarantine flag kept: allow the first launch in System Settings > Privacy & Security."
+    fi
+  fi
+  step "Running the installer of release $tag"
+  rc=0
+  "$BASH_BIN" "$LATEST_DIR/install.sh" --allow-unverified-origin --app "$LATEST_DIR/unpacked/Awake.app" < "$TTY" || rc=$?
+  if (( rc == 0 )); then
+    echo
+    echo "Open Awake with: open \"$APP_DIR/Awake.app\""
+  fi
+  exit "$rc"
+}
+
 # The folder this script is in. build-app.sh and backstop.sh are taken from
 # there, and only when it is the scripts/ folder of a source checkout, with
 # Package.swift one level up (in_checkout). A release zip's folder is not: it
@@ -81,9 +242,33 @@ BUNDLE_ID=com.parthjairam.awake
 # by another account that created the folder in /tmp beforehand. Never the
 # folder above either: a zip unpacked at /tmp/Awake-<version> would make
 # that /tmp, where any account can create scripts/build-app.sh.
+APP_DIR="$HOME/Applications"
+step() { printf '\n==> %s\n' "$*"; }
+# Piped into bash there is no script file (BASH_SOURCE is empty), so there
+# is no folder to look beside and nothing to build from: the only thing such
+# a run can do is fetch the latest release. `--latest` asks for the same
+# from a file.
+latest_usage() {
+  echo "usage: curl -fsSL https://raw.githubusercontent.com/ParthJairam07/awake/main/scripts/install.sh | bash" >&2
+  echo "   or: install.sh --latest" >&2
+}
+if [[ -z "${BASH_SOURCE[0]:-}" ]]; then
+  if (( $# > 1 )) || [[ $# -eq 1 && "$1" != --latest ]]; then
+    echo "a piped install.sh only installs the latest release; it takes no other argument" >&2
+    latest_usage
+    exit 2
+  fi
+  install_latest
+elif [[ "${1:-}" == --latest ]]; then
+  if (( $# != 1 )); then
+    echo "--latest takes no other argument" >&2
+    latest_usage
+    exit 2
+  fi
+  install_latest
+fi
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 in_checkout() { [[ "${SCRIPT_DIR##*/}" == scripts && -f "${SCRIPT_DIR%/*}/Package.swift" ]]; }
-APP_DIR="$HOME/Applications"
 APP="$APP_DIR/Awake.app"
 APP_SUPPORT="$HOME/Library/Application Support/Awake"
 LOG_DIR="$HOME/Library/Logs/Awake"
@@ -107,8 +292,7 @@ CANDIDATE=""
 CANDIDATE_DIR=""
 WORK=""
 
-step() { printf '\n==> %s\n' "$*"; }
-usage() { echo "usage: $0 [--app /path/to/Awake.app [--allow-unverified-origin]]" >&2; }
+usage() { echo "usage: $0 [--latest | --app /path/to/Awake.app [--allow-unverified-origin]]" >&2; }
 # A command for the user to paste, each word quoted for the shell, so a space,
 # quote or $ in a path stays part of that path.
 command_line() { local line; line="$(printf '%q ' "$@")"; printf '%s' "${line% }"; }
