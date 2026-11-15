@@ -92,6 +92,9 @@ struct Paths: Sendable, Equatable {
     var reportFile: URL { appSupport.appendingPathComponent("report.json") }
     /// The menu's status as JSON for dashboards (phase 1).
     var statusFile: URL { appSupport.appendingPathComponent("status.json") }
+    /// What every paired phone asked the Mac to do (phase 3). Owner-only,
+    /// rotated to `audit.log.1` past `PhoneAuditLog.maxBytes`.
+    var auditLog: URL { appSupport.appendingPathComponent("audit.log") }
 
     /// Both logs are owner-only and rotate to `<name>.1` past
     /// `OwnerOnly.maxLogBytes`; uninstall.sh --purge removes the `.1` too.

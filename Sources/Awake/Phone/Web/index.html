@@ -1,0 +1,161 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Awake</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#17191b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Awake">
+<meta name="format-detection" content="telephone=no">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="apple-touch-icon" href="/icon-180.png">
+<link rel="icon" type="image/png" href="/icon-192.png">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<div id="banner" class="banner" role="status" hidden></div>
+
+<main id="pair" class="pair" hidden>
+  <img class="pair-icon" src="/icon-180.png" alt="" width="84" height="84">
+  <h1>Pair with your Mac</h1>
+  <p class="muted">On the Mac, open Awake's Settings, go to <b>Phone app</b> and choose <b>Pair phone…</b>. Type the 6-digit code it shows.</p>
+  <form id="pair-form" autocomplete="off">
+    <label for="pair-code">Pairing code</label>
+    <input id="pair-code" class="code" inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" placeholder="000000" required>
+    <label for="pair-name">Name for this phone</label>
+    <input id="pair-name" maxlength="40" placeholder="iPhone">
+    <button id="pair-button" class="primary big" type="submit">Pair</button>
+    <p id="pair-error" class="error" role="alert" hidden></p>
+  </form>
+  <p class="muted small">The code works once, for five minutes. This phone then keeps a key that only this Mac accepts; "Forget" in Awake's Settings takes it away.</p>
+</main>
+
+<div id="app" hidden>
+  <header class="top">
+    <div>
+      <div id="mac-name" class="mac-name">Mac</div>
+      <div id="mac-sub" class="muted small"></div>
+    </div>
+    <div id="live" class="live" title="Connection"><span class="dot"></span><span id="live-text">connecting</span></div>
+  </header>
+
+  <section id="tab-session" class="tab" data-tab="session">
+    <div class="ring-wrap">
+      <svg class="ring" viewBox="0 0 220 220" aria-hidden="true">
+        <circle class="ring-track" cx="110" cy="110" r="96"></circle>
+        <circle id="ring-arc" class="ring-arc" cx="110" cy="110" r="96" transform="rotate(-90 110 110)"></circle>
+      </svg>
+      <div class="ring-text">
+        <div id="time-left" class="time-left">—</div>
+        <div id="time-sub" class="muted"></div>
+      </div>
+    </div>
+
+    <div id="session-active" hidden>
+      <div class="row3">
+        <button class="big" data-extend="30">+30 m</button>
+        <button class="big" data-extend="60">+1 h</button>
+        <button class="big" data-extend="120">+2 h</button>
+      </div>
+      <button id="end-button" class="big danger wide">End session</button>
+    </div>
+
+    <div id="session-idle" hidden>
+      <h2>Start a session</h2>
+      <div id="presets" class="grid3"></div>
+      <form id="custom-start" class="inline">
+        <input id="custom-minutes" inputmode="numeric" pattern="[0-9]*" placeholder="Minutes" aria-label="Minutes">
+        <button class="big" type="submit">Start</button>
+      </form>
+    </div>
+
+    <div id="session-facts" class="card facts"></div>
+    <div id="leases" class="card" hidden>
+      <h2>Leases</h2>
+      <div id="lease-list"></div>
+    </div>
+  </section>
+
+  <section id="tab-agents" class="tab" data-tab="agents" hidden>
+    <p id="agents-note" class="muted"></p>
+    <div id="agent-list"></div>
+  </section>
+
+  <section id="tab-machine" class="tab" data-tab="machine" hidden>
+    <div id="machine-list" class="card facts"></div>
+    <p id="machine-note" class="muted small"></p>
+  </section>
+
+  <section id="tab-security" class="tab" data-tab="security" hidden>
+    <button id="lock-button" class="big wide">Lock the Mac now</button>
+
+    <div class="card">
+      <div class="card-head">
+        <h2>Screen</h2>
+        <label class="switch"><input id="shot-auto" type="checkbox"><span>every 5 s</span></label>
+      </div>
+      <div id="shot-box" class="shot-box" hidden><img id="shot" alt="The Mac's screen"></div>
+      <p id="shot-note" class="muted small">A still of the Mac's main display. Pinch to zoom, double-tap to reset.</p>
+      <button id="shot-button" class="big wide">Take a screenshot</button>
+    </div>
+
+    <div class="card">
+      <h2>Paired phones</h2>
+      <div id="device-list"></div>
+      <button id="unpair-button" class="wide">Unpair this phone</button>
+    </div>
+
+    <div id="push-card" class="card" hidden>
+      <h2>Notifications</h2>
+      <p id="push-note" class="muted small"></p>
+      <div class="row2">
+        <button id="push-enable">Turn on</button>
+        <button id="push-test">Send a test</button>
+      </div>
+    </div>
+
+    <div class="card panic-card">
+      <h2>Panic</h2>
+      <p class="muted small">Locks the screen, ends the session and resumes everything Awake froze. Hold the button for two seconds.</p>
+      <button id="panic-button" class="big wide danger hold"><span class="hold-fill"></span><span class="hold-label">Hold to panic</span></button>
+    </div>
+  </section>
+
+  <section id="tab-log" class="tab" data-tab="log" hidden>
+    <div class="card-head">
+      <h2>awake.log</h2>
+      <label class="switch"><input id="log-auto" type="checkbox" checked><span>auto-refresh</span></label>
+    </div>
+    <pre id="log" class="log" tabindex="0"></pre>
+    <button id="log-button" class="wide">Refresh</button>
+  </section>
+
+  <nav class="tabs" aria-label="Sections">
+    <button data-go="session" class="on"><span class="ico">◔</span>Session</button>
+    <button data-go="agents"><span class="ico">◈</span>Agents<span id="agents-badge" class="badge" hidden></span></button>
+    <button data-go="machine"><span class="ico">▤</span>Machine</button>
+    <button data-go="security"><span class="ico">◉</span>Security</button>
+    <button data-go="log"><span class="ico">≡</span>Log</button>
+  </nav>
+</div>
+
+<div id="sheet" class="sheet" hidden>
+  <div class="sheet-card" role="dialog" aria-modal="true" aria-labelledby="sheet-title">
+    <h2 id="sheet-title"></h2>
+    <p id="sheet-body" class="muted"></p>
+    <textarea id="sheet-input" rows="3" hidden></textarea>
+    <div class="row2">
+      <button id="sheet-cancel" class="big">Cancel</button>
+      <button id="sheet-ok" class="big primary">OK</button>
+    </div>
+  </div>
+</div>
+<div id="toast" class="toast" role="status" hidden></div>
+<noscript><p class="pair">Awake's phone app needs JavaScript.</p></noscript>
+</body>
+</html>
