@@ -78,9 +78,14 @@ Still to do for phase 2: the real-Mac check (real Claude Code and Codex sessions
 
 ### 3.5 Phase 4: agents ask for awake time (weeks 13+)
 
-- **Leases.** `awake lease --for 2h --reason "refactor billing"` from a CLI, and the same as an **MCP tool** so agents call it themselves. The Mac stays awake while any lease is held, capped by the owner's maximum, and ends when the last lease is released or expires. Each lease has an owner, a reason and an expiry, shown on the phone.
-- "Awake until these finish": a pid, pane or command plus an idle grace period, with a hard cap.
-- Schedules and profiles: end at a clock time, recurring nights, Overnight / Commute / Clamshell desk / Demo.
+**Done** (leases and "awake until these finish"; [docs/leases.md](docs/leases.md)):
+
+- **Leases.** One JSON file per lease in `Application Support/Awake/leases` (owner, reason, expiry, source), written by the `awake` command or its MCP server and watched by the app (`LeaseManager`: directory events plus a 30 s poll). No socket: a lease can be asked for while the app is not running. While any lease is held a session runs (started if needed, first end = the default duration) and ends at the later of its own end and the last expiry plus the grace; when the last lease goes, a session only leases held ends after `leaseGraceMinutes` (5) with the reason "leases released". A session the user started is never shortened. Capped by `leaseCapHours` (8) and the maximum session length. The floors win: any other end revokes the session's leases.
+- **"Awake until these finish".** `--until-pid`, `--until-tmux` and `--until-exit -- cmd`, each with `--grace`, bounded by the lease's expiry. A pid is trusted only with its start time and boot session, so a reused pid never holds a lease.
+- **`awake` command** (`lease`, `release`, `leases`, `status`, `extend`, `mcp`), shipped at `Awake.app/Contents/Helpers/awake` and linked onto the PATH by Settings or `scripts/link-cli.sh`. **MCP server** (`awake mcp`, stdio, protocol 2025-06-18) with `awake_lease`, `awake_release`, `awake_leases`, `awake_status`, `awake_extend`.
+- Leases show in the menu, in `status.json` and in the session summary; "Lease granted" and "Last lease released" go to the Mac and the phone. Settings > Leases has the toggles.
+
+Still to do: schedules and profiles (end at a clock time, recurring nights, Overnight / Commute / Clamshell desk / Demo); leases on the phone screens arrive with phase 3; a real-Mac check of a lease-held overnight session recorded in `docs/release-validation.md`.
 
 ## 4. Decisions already made
 

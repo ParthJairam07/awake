@@ -1,3 +1,4 @@
+import AwakeLeaseKit
 import Foundation
 import Network
 
@@ -26,6 +27,8 @@ struct StatusSnapshot: Codable, Equatable, Sendable {
     /// Phase 2: the agents Awake tracks, oldest first. Empty when agent
     /// tracking is off or no session runs.
     var agents: [AgentStatus] = []
+    /// Phase 4: the leases the app honours right now.
+    var leases: [LeaseStatus] = []
 
     static func encode(_ s: StatusSnapshot) throws -> Data {
         let encoder = Store.makeEncoder()
@@ -56,6 +59,7 @@ extension StatusSnapshot {
         frozenCount = try c.decode(Int.self, forKey: .frozenCount)
         dockerPaused = try c.decode(Bool.self, forKey: .dockerPaused)
         agents = try c.decodeIfPresent([AgentStatus].self, forKey: .agents) ?? []
+        leases = try c.decodeIfPresent([LeaseStatus].self, forKey: .leases) ?? []
     }
 }
 

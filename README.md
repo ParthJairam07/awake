@@ -30,7 +30,7 @@ The first list is the goal; the items marked *(today)* work now, the rest are pl
 - Opt-in: before a battery, heat or planned end, commits and pushes work in progress in each agent repo; under battery, heat or memory pressure, pauses the lowest-priority agents first. *(today, both off by default)*
 - Watches the battery trend (a charger too weak for the load counts as no charger), battery temperature where the Mac reports one, CPU throttling, memory pressure, free disk, and real internet reachability (not just "Wi-Fi connected"). *(today)*
 - Locks the screen on lid close. Leaves you alone when an external monitor is attached. *(today)*
-- Lets agents ask for awake time themselves: a **lease** per task, released when done. The Mac stays awake while any lease is held, capped by a limit you set.
+- Lets agents ask for awake time themselves: a **lease** per task, released when done. The Mac stays awake while any lease is held, capped by a limit you set. *(today)* From a shell with `awake lease --for 2h --reason "refactor billing"`, or as MCP tools with `awake mcp`; see [docs/leases.md](docs/leases.md).
 
 **On the phone**
 - Push alerts for the things that matter: battery or heat, weak charger, internet down and back, session ending in 10 minutes, session ended, something not restored, disk or memory trouble; via ntfy or Pushover, tokens in your keychain. *(today)* Agent waiting, stalled and exited, "All agents finished" and "Dialog blocking" too. *(today)*
@@ -262,6 +262,32 @@ extra per-account permission entries) as they are, so another account can
 still have access through one. Logs can contain Wi-Fi names, process details
 and tmux targets, so check them before you share one.
 [docs/extras.md](docs/extras.md#configuration-and-privacy) has the details.
+
+</details>
+
+<details>
+<summary><strong>Leases: agents ask for awake time</strong></summary>
+
+```bash
+awake lease --for 2h --reason "refactor billing"   # prints a lease id
+awake lease --until-exit -- make test              # held while the command runs
+awake leases
+awake release <id>
+```
+
+Awake runs a session while any lease is held and ends it 5 minutes after the
+last one is released or expires. A session you started is never cut short.
+The battery and heat rules still end a session whatever leases say, and
+ending a session by hand revokes its leases. `awake mcp` offers the same to
+Claude Code, Codex and Cursor as MCP tools.
+
+Settings > Leases has: **Honour leases** (on), **A lease may start a
+session** (on), **Leases hold the Mac for at most** (8 h), **End after the
+last lease** (5 min later), **Notify when a lease is granted and when the
+last one is released** (on), and **Install `awake` command**, which links
+the command inside the app into `/usr/local/bin` or `~/.local/bin`
+(`scripts/link-cli.sh` does the same). [docs/leases.md](docs/leases.md) has
+the agent configs and every rule.
 
 </details>
 

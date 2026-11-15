@@ -7,6 +7,7 @@ import Foundation
 /// Default layout:
 ///   ~/Applications/Awake.app/Contents/Resources/backstop.sh
 ///   ~/Library/Application Support/Awake/{session.json,state.json,config.json,unfinished-command.json}
+///   ~/Library/Application Support/Awake/leases/<id>.json
 ///   ~/Library/Logs/Awake/{awake.log,handoffs.log}
 ///   ~/Library/LaunchAgents/com.awake.backstop.plist
 ///
@@ -99,6 +100,14 @@ struct Paths: Sendable, Equatable {
     /// Phase 2: what a pre-end save set out to do and what came of it,
     /// written before anything runs.
     var preEndFile: URL { appSupport.appendingPathComponent("pre-end.json") }
+
+    /// Phase 4: one `<id>.json` per lease. The `awake` command and the MCP
+    /// server write and delete files here; the app watches the directory.
+    /// The same path as `LeaseHome.leasesDirectory` in AwakeLeaseKit.
+    var leasesDirectory: URL { appSupport.appendingPathComponent("leases", isDirectory: true) }
+    /// What the lease manager has to remember across a relaunch: which
+    /// session the leases started or stretched, and which it announced.
+    var leaseStateFile: URL { appSupport.appendingPathComponent("lease-state.json") }
 
     /// Both logs are owner-only and rotate to `<name>.1` past
     /// `OwnerOnly.maxLogBytes`; uninstall.sh --purge removes the `.1` too.

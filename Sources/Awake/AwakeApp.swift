@@ -88,7 +88,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = StatusItemController(manager: manager, status: status) { [weak settings] in
             settings?.show()
         }
-        Task { await manager.reconcile() }
+        Task {
+            await manager.reconcile()
+            // Phase 4: after the reconcile, so the leases meet the session
+            // found on disk rather than start one beside it.
+            manager.leases?.start()
+        }
     }
 
     /// Quitting always ends the session (spec 1). Terminate is deferred until

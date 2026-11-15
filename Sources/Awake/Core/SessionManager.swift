@@ -22,6 +22,9 @@ enum EndReason: String, Sendable {
     /// may still have been applied, so the start is undone from the journal
     /// like an end rather than rolled back from memory.
     case startFailed
+    /// Phase 4: the session was held only by leases, and the last one was
+    /// released or expired `Config.leaseGraceMinutes` ago.
+    case leasesReleased
 }
 
 /// What `end` achieved. Callers that are about to quit need to know whether
@@ -446,6 +449,8 @@ final class SessionManager {
     @ObservationIgnored var services: AppServices?
     /// The running session's tally (phase 1), journaled to report.json.
     @ObservationIgnored private(set) var report: SessionReport?
+    /// Phase 4: leases. Set by `live()`; nil in tests that do not make one.
+    @ObservationIgnored var leases: LeaseManager?
 
     @ObservationIgnored private var deadlineTimer: Timer?
     @ObservationIgnored private var countdownTimer: Timer?
@@ -664,6 +669,11 @@ final class SessionManager {
             keyboard: keyboard
         )
         m.services = services
+        // Phase 4: leases. Started by the app delegate after the launch
+        // reconcile, so the session found on disk is known first.
+        let leases = LeaseManager(manager: m, notifier: notifier, watcher: LeaseDirectoryWatcher())
+        m.leases = leases
+        services.leaseStatuses = { [weak leases] now in leases?.statuses(now: now) ?? [] }
         notifier.configProvider = { [weak m] in m?.config ?? Config() }
         services.logStartupSnapshot()
         return m
@@ -1319,6 +1329,60 @@ final class SessionManager {
         await armDeadline(updated.endsAt)
     }
 
+    /// Phase 4: leases move the end of the running session, later or
+    /// earlier, to `newEnd`. Never before now and never past now +
+    /// `config.maxDuration`. The same order as an extend: the recovery
+    /// agent is confirmed loaded, session.json is written, then the
+    /// in-process timers follow. Returns the end the session has when this
+    /// returns, nil when there is no session or the move was refused.
+    ///
+    /// `expected` is the end the caller decided from. If the session ends
+    /// somewhere else by the time this holds the lock, the user extended
+    /// it in between, and the move is dropped: a decision made before that
+    /// extension must not undo it.
+    @discardableResult
+    func moveEnd(to newEnd: Date, from expected: Date) async -> Date? {
+        guard session != nil else { return nil }
+        let ticket = endTicket
+        guard case let .success(end) = await exclusive("lease", { await self.performMoveEnd(to: newEnd, from: expected, ticket: ticket) }) else { return nil }
+        return end
+    }
+
+    private func performMoveEnd(to newEnd: Date, from expected: Date, ticket: Int) async -> Date? {
+        guard let current = session, endTicket == ticket else { return nil }
+        guard current.endsAt == expected else {
+            Log.info("lease end change dropped: the session's end was changed meanwhile")
+            return nil
+        }
+        let now = clock()
+        let ceiling = now.addingTimeInterval(max(config.maxDuration, SessionMath.minimumDuration))
+        let end = min(max(newEnd, now), ceiling)
+        guard end != current.endsAt else { return end }
+        do {
+            try await backstop.arm()
+        } catch {
+            fail("could not confirm backstop: \(error.localizedDescription)")
+            return nil
+        }
+        guard endTicket == ticket, session == current else {
+            Log.info("lease end change abandoned: end requested meanwhile")
+            return nil
+        }
+        var updated = current
+        updated.extensions.append(end.timeIntervalSince(current.endsAt))
+        updated.endsAt = end
+        do {
+            try store.saveSession(updated)
+        } catch {
+            fail("could not write session: \(error.localizedDescription)")
+            return nil
+        }
+        session = updated
+        Log.info("session end moved by leases from \(iso(current.endsAt)) to \(iso(end))")
+        await armDeadline(end)
+        return end
+    }
+
     /// Full session end: delete the session file first (so a crash here leaves
     /// a clean "no session" for reconcile/backstop), then undo RuntimeState
     /// from disk. The polling agent stays loaded.
@@ -1374,7 +1438,11 @@ final class SessionManager {
         Log.info("session end (\(reason.rawValue))")
         stopTimers()
         countdownPaused = false
+        let ended = session
         session = nil
+        // Leases that held this session go with it, unless they are why it
+        // ended or the app is quitting (`LeaseManager.sessionEnded`).
+        leases?.sessionEnded(ended, reason: reason)
         // Every lid action is undone from the journal below, or by the
         // retry of this end, and Low Power Mode restored from it: a lid
         // event refused earlier, a settle pass waiting to run again and
@@ -1583,6 +1651,7 @@ final class SessionManager {
         case .thermalCritical: "thermal critical"
         case .batteryHot: "battery too hot"
         case .backstop: "recovery agent"
+        case .leasesReleased: "leases released"
         default: raw
         }
     }
@@ -3057,7 +3126,9 @@ final class SessionManager {
             // one extended meanwhile has a new deadline and its own timer.
             guard let current = session, current.endsAt.timeIntervalSince(clock()) <= 0 else { return }
         }
-        await end(reason: .timer)
+        // A session only leases were holding ends because they are gone,
+        // not because a time somebody chose is up.
+        await end(reason: leases?.timerEndReason ?? .timer)
     }
 
     /// 1 Hz redraw aligned to whole wall-clock seconds so the digits change
@@ -3312,6 +3383,7 @@ final class SessionManager {
             : "A previous session left changes behind; everything has been undone."
         case .recoveryUnavailable: "Awake could not arm its recovery agent for the session found on disk, so it ended the session. Sleep is back to normal."
         case .startFailed: "Awake could not disable sleep, so no session was started. Sleep is back to normal."
+        case .leasesReleased: "The last lease was released or expired. Sleep is back to normal."
         }
     }
 }

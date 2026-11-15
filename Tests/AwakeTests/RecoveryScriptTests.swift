@@ -6718,6 +6718,8 @@ private final class ScriptFixture {
         try fm.createDirectory(at: binroot, withIntermediateDirectories: true)
         let binary = binroot.appendingPathComponent("Awake")
         try TestScripts.write("#!/bin/bash\nexit 0\n", to: binary)
+        // Phase 4: the `awake` command build-app.sh puts under Contents/Helpers.
+        try TestScripts.write("#!/bin/bash\nexit 0\n", to: binroot.appendingPathComponent("awake-cli"))
         try fm.createDirectory(at: plist.deletingLastPathComponent(), withIntermediateDirectories: true)
     }
 

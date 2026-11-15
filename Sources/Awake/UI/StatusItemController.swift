@@ -694,7 +694,8 @@ final class StatusItemController: NSObject {
             commandRunning: manager.commandWarning,
             foreignSleep: manager.foreignSleepWarning,
             outputsWaiting: manager.outputsWaitingForRestore,
-            lidSimulationBuild: LidSimulationBuild.isCompiledIn
+            lidSimulationBuild: LidSimulationBuild.isCompiledIn,
+            leases: manager.leases?.menuLines(now: Date()) ?? []
         )
     }
 

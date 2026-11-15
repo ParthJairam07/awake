@@ -1,3 +1,4 @@
+import AwakeLeaseKit
 import Foundation
 import Observation
 
@@ -284,7 +285,8 @@ final class AppServices {
             lastOutageSeconds: status.lastGap.map { Int($0) },
             frozenCount: status.frozenCount,
             dockerPaused: status.dockerPaused,
-            agents: status.agents
+            agents: status.agents,
+            leases: leaseStatuses?(now) ?? []
         )
     }
 
@@ -729,6 +731,12 @@ final class AppServices {
         let pressure = PausePlanner.pressure(lowPowerCause: cause, thermal: power.thermalState, memoryCritical: memoryCritical)
         Task { @MainActor in await pauser.update(pressure: pressure) }
     }
+
+    // MARK: Leases (phase 4)
+
+    /// The leases for `snapshot`, from the lease manager. Set by
+    /// `SessionManager.live()`.
+    var leaseStatuses: (@MainActor (Date) -> [LeaseStatus])?
 }
 
 extension BrightnessSampler {

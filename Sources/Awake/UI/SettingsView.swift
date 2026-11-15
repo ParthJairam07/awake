@@ -30,6 +30,9 @@ struct SettingsView: View {
     @State private var accessibilityTrusted = AXDialogProbe().isTrusted()
     /// What "Install hook script" did.
     @State private var hookNotice: String?
+    /// What the "Install `awake` command" button last reported.
+    @State private var commandLinkNotice: String?
+    @State private var commandLinkFailed = false
 
     var body: some View {
         Form {
@@ -40,6 +43,7 @@ struct SettingsView: View {
             networkSection
             phoneSection
             agentsSection
+            leaseSection
             appSection
         }
         .formStyle(.grouped)
@@ -645,6 +649,73 @@ struct SettingsView: View {
         .onAppear { accessibilityTrusted = AXDialogProbe().isTrusted() }
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             accessibilityTrusted = AXDialogProbe().isTrusted()
+        }
+    }
+
+    // MARK: Leases (phase 4)
+
+    private var leaseCap: Binding<Int> {
+        Binding(get: { manager.config.leaseCapHours }, set: { v in update { $0.leaseCapHours = min(max(v, Config.leaseCapRange.lowerBound), Config.leaseCapRange.upperBound) } })
+    }
+
+    private var leaseGrace: Binding<Int> {
+        Binding(get: { manager.config.leaseGraceMinutes }, set: { v in update { $0.leaseGraceMinutes = min(max(v, Config.leaseGraceRange.lowerBound), Config.leaseGraceRange.upperBound) } })
+    }
+
+    private var leaseSection: some View {
+        Section {
+            Text("Agents and scripts can ask for awake time themselves: `awake lease --for 2h --reason \"refactor billing\"`, or the same as an MCP tool (`awake mcp`). The Mac stays awake while any lease is held. The battery and heat rules above still end a session whatever leases say.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Toggle("Honour leases", isOn: bind(\.leasesEnabled))
+            Toggle("A lease may start a session", isOn: bind(\.leasesMayStartSession))
+                .disabled(!manager.config.leasesEnabled)
+            Stepper(value: leaseCap, in: Config.leaseCapRange) {
+                LabeledContent("Leases hold the Mac for at most", value: "\(manager.config.leaseCapHours) h")
+            }
+            .disabled(!manager.config.leasesEnabled)
+            Stepper(value: leaseGrace, in: Config.leaseGraceRange) {
+                LabeledContent("End after the last lease", value: manager.config.leaseGraceMinutes == 0 ? "at once" : "\(manager.config.leaseGraceMinutes) min later")
+            }
+            .disabled(!manager.config.leasesEnabled)
+            Toggle("Notify when a lease is granted and when the last one is released", isOn: bind(\.leaseNotifications))
+                .disabled(!manager.config.leasesEnabled)
+            Text("The cap counts from when a lease was made, and from the first lease of a session for all of them together. A session you started is never cut short by leases; one that only leases were holding ends that long after the last is released or expires. Ending a session by hand revokes its leases.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            if let leases = manager.leases, !leases.held.isEmpty {
+                ForEach(leases.menuLines(now: Date()), id: \.self) { line in
+                    Text(line.trimmingCharacters(in: .whitespaces))
+                        .font(.caption)
+                        .textSelection(.enabled)
+                }
+            }
+            HStack {
+                Button("Install `awake` command") {
+                    switch CommandLink.install() {
+                    case let .success(installed):
+                        commandLinkNotice = installed.message
+                        commandLinkFailed = false
+                    case let .failure(failure):
+                        commandLinkNotice = failure.localizedDescription
+                        commandLinkFailed = true
+                    }
+                }
+                Spacer()
+            }
+            if let commandLinkNotice {
+                Text(commandLinkNotice)
+                    .font(.caption)
+                    .foregroundStyle(commandLinkFailed ? AnyShapeStyle(.orange) : AnyShapeStyle(.secondary))
+                    .textSelection(.enabled)
+            } else {
+                Text("Links the command inside Awake.app into /usr/local/bin, or ~/.local/bin when that needs a password. Leases are files in \(manager.paths.leasesDirectory.path).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+        } header: {
+            Text("Leases")
         }
     }
 
