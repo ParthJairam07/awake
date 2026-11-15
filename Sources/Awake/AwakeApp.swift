@@ -29,6 +29,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private(set) lazy var updater = AppUpdater { [manager] in manager.isActive }
     private var statusItem: StatusItemController?
     private var settingsWindow: SettingsWindow?
+    private var onboarding: OnboardingWindow?
     private var terminating = false
 
     override init() {
@@ -94,6 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Step E: updates.
         updater.start(automaticChecks: manager.config.automaticUpdates)
         statusItem?.checkForUpdates = { [updater] in updater.checkForUpdates() }
+        // Step E: first-run setup, and "Setup…" in the menu to reopen it.
+        onboarding = Onboarding.wire(manager: manager, loginItem: loginItem, statusItem: statusItem)
         Task { await manager.reconcile() }
     }
 
