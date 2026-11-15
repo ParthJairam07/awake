@@ -504,6 +504,27 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertFalse(cask.contains("auto_updates"), "an unsigned build does not update itself, so brew must keep upgrading it")
     }
 
+    /// ci.yml builds and packages an ad-hoc 0.0.0-ci on pull requests, with
+    /// the same two scripts release.yml uses and no secret, and uploads the
+    /// zip, so packaging breaks on the pull request and not on the tag.
+    func testCIHasAReleaseDryRunOnPullRequests() throws {
+        let ci = try XCTUnwrap(try workflows().first { $0.name == "ci.yml" }).text
+        let all = lines(ci)
+        let start = try XCTUnwrap(all.firstIndex(of: "  release-dry-run:"))
+        let end = all[(start + 1)...].firstIndex { $0.hasPrefix("  ") && !$0.hasPrefix("   ") && $0.hasSuffix(":") } ?? all.endIndex
+        let body = Array(all[start..<end])
+        let text = body.joined(separator: "\n")
+        XCTAssertTrue(body.contains("    if: github.event_name == 'pull_request'"))
+        XCTAssertTrue(body.contains("    runs-on: macos-26"))
+        XCTAssertTrue(body.contains("      VERSION: 0.0.0-ci"))
+        XCTAssertTrue(body.contains(#"        run: scripts/build-app.sh --version "$VERSION" --output dist"#))
+        XCTAssertTrue(text.contains(#".github/scripts/package-release.sh --app dist/Awake.app --name "Awake-$VERSION" --output release"#))
+        XCTAssertTrue(text.contains("grep -qx 'Signature=adhoc' signature.txt"), "ad-hoc: no certificate")
+        XCTAssertTrue(text.contains("uses: actions/upload-artifact@") && text.contains("          path: release/Awake-0.0.0-ci.zip"))
+        XCTAssertFalse(text.contains("secrets."), "the dry run reads no secret")
+        XCTAssertFalse(text.contains("--sign-identity"))
+    }
+
     private func packageScript() throws -> String {
         try String(contentsOf: repoRoot.appendingPathComponent(".github/scripts/package-release.sh"), encoding: .utf8)
     }
