@@ -144,6 +144,9 @@ struct Config: Codable, Equatable, Sendable {
     /// only ever asks; nothing is downloaded or installed without a click.
     /// Used only by a build that can update itself (`UpdaterAvailability`).
     var automaticUpdates: Bool = true
+    /// Whether the first-run Setup window has been finished or closed. False
+    /// for a config.json without the key, so an upgrade shows it once.
+    var onboardingDone: Bool = false
 
     static let defaultPresets: [TimeInterval] = [
         30 * 60,
@@ -235,6 +238,7 @@ struct Config: Codable, Equatable, Sendable {
         launchAtLoginInstall = try c.decodeIfPresent(String.self, forKey: .launchAtLoginInstall)
         // Step E
         automaticUpdates = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdates) ?? d.automaticUpdates
+        onboardingDone = try c.decodeIfPresent(Bool.self, forKey: .onboardingDone) ?? d.onboardingDone
     }
 }
 
