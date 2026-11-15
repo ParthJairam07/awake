@@ -166,7 +166,7 @@ final class PhoneServerTests: XCTestCase {
 
     func testClientAddressBelievesForwardedForOnlyFromLoopback() {
         XCTAssertEqual(PhoneServer.clientAddress(peer: "127.0.0.1", forwardedFor: "100.64.0.9"), "100.64.0.9")
-        XCTAssertEqual(PhoneServer.clientAddress(peer: "127.0.0.1", forwardedFor: "100.64.0.9, 10.0.0.1"), "100.64.0.9")
+        XCTAssertEqual(PhoneServer.clientAddress(peer: "127.0.0.1", forwardedFor: "10.0.0.1, 100.64.0.9"), "100.64.0.9", "the entry the proxy appended, not one the client sent")
         XCTAssertEqual(PhoneServer.clientAddress(peer: "127.0.0.1", forwardedFor: nil), "127.0.0.1")
         XCTAssertEqual(PhoneServer.clientAddress(peer: "127.0.0.1", forwardedFor: "not an address"), "127.0.0.1")
         XCTAssertEqual(PhoneServer.clientAddress(peer: "100.64.0.5", forwardedFor: "1.2.3.4"), "100.64.0.5", "a tailnet peer cannot pick its own address")

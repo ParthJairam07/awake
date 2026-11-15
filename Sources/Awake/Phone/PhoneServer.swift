@@ -332,11 +332,14 @@ final class PhoneServer {
     }
 
     /// The address a request is attributed to in the rate limits and the
-    /// audit log.
+    /// audit log. Behind `tailscale serve` the peer is loopback and the
+    /// proxy names the phone in X-Forwarded-For; the last entry is the one
+    /// the proxy next to us wrote, so that is the one believed (earlier
+    /// entries are whatever the client sent).
     nonisolated static func clientAddress(peer: String, forwardedFor: String?) -> String {
         guard peer == loopback || peer == "::1",
-              let first = forwardedFor?.split(separator: ",").first?.trimmingCharacters(in: .whitespaces),
-              IPv4Address(first) != nil || IPv6Address(first) != nil else { return peer }
-        return first
+              let last = forwardedFor?.split(separator: ",").last?.trimmingCharacters(in: .whitespaces),
+              IPv4Address(last) != nil || IPv6Address(last) != nil else { return peer }
+        return last
     }
 }

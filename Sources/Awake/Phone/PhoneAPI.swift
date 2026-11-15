@@ -122,6 +122,7 @@ final class PhoneAPI {
         info["presetMinutes"] = session.presetMinutes
         info["maxMinutes"] = session.maxMinutes
         info["agentActions"] = agents.available
+        info["webPush"] = push.available
         info["time"] = Self.iso(clock())
         if let device { info["device"] = ["id": device.id, "name": device.name] }
         let server = (try? JSONSerialization.data(withJSONObject: info, options: [.sortedKeys, .withoutEscapingSlashes])) ?? Data("{}".utf8)

@@ -109,6 +109,9 @@ protocol PhoneMachineProbing: AnyObject {
 /// Web push (step 5). `available` is false until keys exist.
 @MainActor
 protocol PhonePushSubscribing: AnyObject {
+    /// Whether this Mac can send web push at all. The phone hides its
+    /// notifications card when it cannot.
+    var available: Bool { get }
     /// The VAPID public key (base64url, uncompressed P-256 point) the
     /// browser subscribes with, or nil when web push is not available.
     func publicKey() async -> String?
@@ -119,6 +122,7 @@ protocol PhonePushSubscribing: AnyObject {
 
 @MainActor
 final class UnavailablePhonePush: PhonePushSubscribing {
+    let available = false
     func publicKey() async -> String? { nil }
     func subscribe(deviceID: String, subscription: [String: Any]) async -> PhoneActionResult { .failed("web push is not available") }
     func unsubscribe(deviceID: String) async -> PhoneActionResult { .failed("web push is not available") }

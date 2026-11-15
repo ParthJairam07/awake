@@ -504,7 +504,8 @@
       fact(facts, 'Status', 'waiting for the Mac…');
     } else {
       var battery = status.batteryPercent == null ? 'unknown' : status.batteryPercent + '%';
-      if (status.chargerDraining) fact(facts, 'Battery', battery + ', charger too weak', 'warn');
+      if (status.batteryPercent == null) fact(facts, 'Battery', 'unknown');
+      else if (status.chargerDraining) fact(facts, 'Battery', battery + ', charger too weak', 'warn');
       else fact(facts, 'Battery', battery + (status.isCharging ? ', on power' : ', on battery'), !status.isCharging && status.batteryPercent != null && status.batteryPercent < 20 ? 'bad' : null);
       fact(facts, 'Lid', status.lidClosed ? (status.lidOnDesk ? 'closed, external display' : 'closed') : 'open');
       fact(facts, 'Heat', status.thermalState || 'unknown', status.thermalState === 'serious' ? 'warn' : status.thermalState === 'critical' ? 'bad' : null);
@@ -846,7 +847,10 @@
     var card = $('push-card');
     var server = state.server || {};
     push.supported = !!(window.isSecureContext && 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window);
-    card.hidden = false;
+    // A Mac that cannot send web push shows no card at all: ntfy and
+    // Pushover remain the alert path.
+    card.hidden = server.webPush !== true;
+    if (card.hidden) return;
     var note = $('push-note');
     var enable = $('push-enable');
     var test = $('push-test');

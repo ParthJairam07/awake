@@ -34,7 +34,7 @@ The first list is the goal; the items marked *(today)* work now, the rest are pl
 **On the phone**
 - Push alerts for the things that matter: battery or heat, weak charger, internet down and back, session ending in 10 minutes, session ended, something not restored, disk or memory trouble; via ntfy or Pushover, tokens in your keychain. *(today)* Agent waiting/stalled alerts come with the agent layer.
 - One screen per agent, one tap to answer a prompt, nudge, pause, or stop it.
-- Extend or end the session, lock the screen, take a screenshot, commit and push a repo.
+- A web app served by the Mac over Tailscale to paired phones: time left, extend, end or start a session, lock the screen, take a screenshot, read the machine and the log, Panic. *(today; [docs/phone.md](docs/phone.md))* Agent cards fill in with the agent layer; commit and push a repo is still to come.
 - A summary when the session ends: how long it ran, why it ended, battery used, lid closes, Low Power Mode and heat events, outages, whether everything was restored. *(today)* Agents and unpushed repos join it with the agent layer.
 - `status.json` and a local `http://127.0.0.1:<port>/status.json` for Raycast or SketchyBar. *(today)*
 
@@ -234,6 +234,32 @@ and tabs come back only if the browser reopens them on startup. Some web apps
 may still stop with the lid closed.
 [docs/extras.md](docs/extras.md#chrome-chromium-arc-and-comet-throttling) has the
 details.
+
+</details>
+
+<details>
+<summary><strong>Phone app</strong></summary>
+
+A web app for your phone, served by the Mac over
+[Tailscale](https://tailscale.com) to phones you have paired: the session
+(time left, extend, end, start), the machine's readings, lock, a
+screenshot, the log and a Panic button. It listens only on the Mac's
+Tailscale address and on `127.0.0.1`, never on the Wi-Fi network. Settings
+> **Phone app**:
+
+- **Phone app** (`phoneApp`, off by default): start the server with Awake.
+- **Port** (`phonePort`, default 7788): the port it listens on. For an
+  https address run `tailscale serve --bg 7788` once in Terminal.
+- **Pair phone…** shows a six-digit code and a QR code, good for five
+  minutes. Paired phones are listed with **Forget**, and **Forget all
+  phones** ends every phone's access.
+- **Screen Recording** shows whether macOS lets Awake take the screenshot
+  the phone asks for, and opens the Privacy pane.
+- **Audit log**: every action a phone takes is written to
+  `~/Library/Application Support/Awake/audit.log`.
+
+The Mac cannot be unlocked from the phone.
+[docs/phone.md](docs/phone.md) has the setup steps and the security model.
 
 </details>
 

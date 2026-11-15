@@ -274,6 +274,7 @@ final class PhoneAPITests: XCTestCase {
         XCTAssertEqual(server["name"] as? String, "Test Mac")
         XCTAssertEqual(server["presetMinutes"] as? [Int], [30, 60, 120])
         XCTAssertEqual(server["agentActions"] as? Bool, true)
+        XCTAssertEqual(server["webPush"] as? Bool, false, "no web push transport yet: the phone hides the card")
         XCTAssertEqual((server["device"] as? [String: Any])?["name"] as? String, "iPhone")
     }
 
