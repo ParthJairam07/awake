@@ -75,9 +75,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.error("could not save config after the launch at login check: \(error.localizedDescription)")
             }
         }
-        // The phone app runs with the app, not with a session: the phone
-        // starts sessions too (phase 3).
-        manager.services?.startPhoneApp(for: manager)
         let settings = SettingsWindow { [manager, secrets, phoneSecrets, locationPermission, loginItem, releases, updater] in
             AnyView(
                 SettingsView(
@@ -105,6 +102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // Phase 4: after the reconcile, so the leases meet the session
             // found on disk rather than start one beside it.
             manager.leases?.start()
+            // Phase 3: the phone app runs with the app, not with a session,
+            // and the phone starts sessions too. After the reconcile, so a
+            // request from a paired phone meets the session found on disk
+            // rather than start one beside it.
+            manager.services?.startPhoneApp(for: manager)
         }
     }
 
