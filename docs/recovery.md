@@ -1,6 +1,6 @@
 # How recovery works
 
-The [README](../README.md#how-recovery-works) has the short version. This page
+The [README](../README.md#what-can-fail-and-how-recovery-works) has the short version. This page
 has every case.
 
 Awake records pending changes in a recovery journal. On session end, the app
