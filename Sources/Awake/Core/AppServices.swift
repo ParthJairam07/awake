@@ -629,6 +629,8 @@ final class AppServices {
     private(set) var agentPauser: AgentPauser?
     private let hookSocket = HookSocketServer()
     private var memoryCritical = false
+    /// The manager `startAgents` wired, so `stopAgents` unwires the same.
+    private weak var agentManager: SessionManager?
 
     /// Called by `start`: the registry, the hook endpoints, the dialog
     /// detector, the pre-end save and the priority pause, all for the
@@ -636,6 +638,7 @@ final class AppServices {
     /// acts, so a toggle in Settings applies without a restart.
     func startAgents(for manager: SessionManager) {
         let deps = agentDependencies
+        agentManager = manager
         let config: @MainActor () -> Config = { [weak manager] in manager?.config ?? Config() }
         let tracker = AgentTracker(probe: deps.probe, tmux: deps.tmux, notifier: notifier, git: deps.git, config: config)
         tracker.onChange = { [weak self] statuses in
@@ -696,7 +699,8 @@ final class AppServices {
         statusServer.onHook = nil
         dialogWatcher?.stop()
         dialogWatcher = nil
-        manager?.preEnd = nil
+        agentManager?.preEnd = nil
+        agentManager = nil
         preEnd = nil
         agentPauser?.stop()
         agentPauser = nil
