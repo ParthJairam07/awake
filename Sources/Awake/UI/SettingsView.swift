@@ -12,6 +12,9 @@ struct SettingsView: View {
     let loginItem: LoginItem
     /// The "Check for updates" button's one request and its report.
     let releases: ReleaseChecker
+    /// Step E: nil in previews and tests; the toggle then reads as a build
+    /// that cannot update itself.
+    var updater: AppUpdater?
 
     @State private var newPreset = ""
     @State private var presetError: String?
@@ -571,6 +574,7 @@ struct SettingsView: View {
                     .textSelection(.enabled)
             }
             releaseCheck
+            updateSettings
             if LidSimulationBuild.isCompiledIn {
                 Text(LidSimulationBuild.marker)
                     .font(.caption)
@@ -605,6 +609,34 @@ struct SettingsView: View {
             Text("Could not check: \(reason)")
                 .font(.caption)
                 .foregroundStyle(.red)
+        }
+    }
+
+    /// Step E: the automatic update check. Live only in a build that can
+    /// update itself (Developer ID signed, with an update key); any other
+    /// build says why under a disabled switch.
+    @ViewBuilder
+    private var updateSettings: some View {
+        let availability = updater?.availability ?? .unavailable(.notAnAppBundle)
+        Toggle("Check for updates automatically", isOn: Binding(
+            get: { manager.config.automaticUpdates },
+            set: { on in
+                update { $0.automaticUpdates = on }
+                updater?.setAutomaticChecks(on)
+            }
+        ))
+        .disabled(availability != .available)
+        Text(Self.updateNote(availability))
+            .font(.caption)
+            .foregroundStyle(.secondary)
+    }
+
+    static func updateNote(_ availability: UpdaterAvailability) -> String {
+        switch availability {
+        case .available:
+            "About once a day, and never during a session. Awake asks before it downloads or installs anything. The menu's \"Check for Updates\u{2026}\" checks now."
+        case let .unavailable(reason):
+            "\(reason.explanation) The button above still tells you whether a newer release exists."
         }
     }
 

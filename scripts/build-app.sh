@@ -32,6 +32,8 @@ SWIFT=/usr/bin/swift
 CODESIGN=/usr/bin/codesign
 PLUTIL=/usr/bin/plutil
 PLISTBUDDY=/usr/libexec/PlistBuddy
+OTOOL=/usr/bin/otool
+DITTO=/usr/bin/ditto
 RM=/bin/rm
 MKDIR=/bin/mkdir
 CP=/bin/cp
@@ -157,6 +159,41 @@ step "Assembling $APP"
 # bundle and only then runs this copy; an edited script fails that check.
 "$CP" "$ROOT/scripts/backstop.sh" "$APP/Contents/Resources/backstop.sh"
 "$CHMOD" 755 "$APP/Contents/Resources/backstop.sh"
+# Sparkle.framework (auto-updates). SwiftPM leaves the binary framework
+# beside the executable; the app looks for it in Contents/Frameworks (the
+# @executable_path/../Frameworks rpath in Package.swift). ditto keeps the
+# framework's symlinks. A binary that links it but has no framework to
+# carry would not launch, so that stops the build.
+SPARKLE=""
+if "$OTOOL" -L "$BIN" | grep -q '@rpath/Sparkle\.framework/'; then
+  if [[ ! -d "$(dirname "$BIN")/Sparkle.framework" ]]; then
+    echo "$BIN links Sparkle.framework, but it is not beside the binary" >&2
+    exit 1
+  fi
+  SPARKLE="$APP/Contents/Frameworks/Sparkle.framework"
+  "$MKDIR" -p "$APP/Contents/Frameworks"
+  "$DITTO" "$(dirname "$BIN")/Sparkle.framework" "$SPARKLE"
+fi
+# The key Sparkle checks a downloaded update against: the public half of the
+# EdDSA pair whose private half signs the appcast in the Release workflow
+# (docs/releasing.md). An empty or missing file means no key: the app then
+# never starts Sparkle (UpdaterAvailability) and says so in its log.
+KEY_FILE="$ROOT/scripts/sparkle-public-key.txt"
+UPDATE_KEY=""
+if [[ -f "$KEY_FILE" ]]; then
+  UPDATE_KEY="$(tr -d '[:space:]' < "$KEY_FILE")"
+fi
+if [[ -n "$UPDATE_KEY" ]]; then
+  # An Ed25519 public key is 32 bytes: 44 base64 characters, one of them padding.
+  if [[ ! "$UPDATE_KEY" =~ ^[A-Za-z0-9+/]{43}=$ ]]; then
+    echo "$KEY_FILE does not hold an EdDSA public key (44 base64 characters, as generate_keys prints)" >&2
+    exit 1
+  fi
+  "$PLISTBUDDY" -c "Add :SUPublicEDKey string $UPDATE_KEY" "$APP/Contents/Info.plist"
+  echo "update key from $KEY_FILE"
+else
+  echo "no update key in $KEY_FILE: this build will not update itself"
+fi
 if [[ -n "$VERSION" ]]; then
   "$PLISTBUDDY" -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
   echo "version $VERSION"
@@ -164,6 +201,25 @@ fi
 "$PLUTIL" -lint "$APP/Contents/Info.plist" >/dev/null
 
 # 3. Sign --------------------------------------------------------------------
+# Nested code first, inside out, each piece on its own: codesign --deep would
+# give every piece the app's entitlements and is not what Apple recommends.
+# The order and the flags are the ones Sparkle documents for a build signed
+# outside Xcode; Downloader.xpc keeps the entitlements it shipped with.
+sign_nested() { # codesign flags and the path
+  if [[ -n "$SIGN_IDENTITY" ]]; then
+    "$CODESIGN" --force --sign "$SIGN_IDENTITY" --options runtime --timestamp "$@"
+  else
+    "$CODESIGN" --force --sign - "$@"
+  fi
+}
+if [[ -n "$SPARKLE" ]]; then
+  step "Signing Sparkle.framework"
+  sign_nested "$SPARKLE/Versions/B/XPCServices/Installer.xpc"
+  sign_nested --preserve-metadata=entitlements "$SPARKLE/Versions/B/XPCServices/Downloader.xpc"
+  sign_nested "$SPARKLE/Versions/B/Autoupdate"
+  sign_nested "$SPARKLE/Versions/B/Updater.app"
+  sign_nested "$SPARKLE"
+fi
 if [[ -n "$SIGN_IDENTITY" ]]; then
   step "Signing with $SIGN_IDENTITY (hardened runtime, timestamp, entitlements)"
   "$CODESIGN" --force --sign "$SIGN_IDENTITY" --options runtime --timestamp --entitlements "$ENTITLEMENTS" "$APP"
@@ -172,5 +228,9 @@ else
   "$CODESIGN" --force --sign - "$APP"
 fi
 "$CODESIGN" --verify --strict "$APP"
+if [[ -n "$SPARKLE" ]]; then
+  # The framework and what is inside it, which the line above does not open.
+  "$CODESIGN" --verify --strict --deep "$APP"
+fi
 "$CODESIGN" -dvv "$APP" 2>&1 | grep -E '^(Identifier|Signature|Authority|TeamIdentifier|CDHash)=' || true
 echo "$APP"

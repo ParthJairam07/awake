@@ -25,6 +25,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let locationPermission: LocationPermission
     let loginItem = LoginItem()
     let releases = ReleaseChecker()
+    /// Step E: Sparkle, when this build can update itself (Updater.swift).
+    private(set) lazy var updater = AppUpdater { [manager] in manager.isActive }
     private var statusItem: StatusItemController?
     private var settingsWindow: SettingsWindow?
     private var terminating = false
@@ -72,7 +74,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.error("could not save config after the launch at login check: \(error.localizedDescription)")
             }
         }
-        let settings = SettingsWindow { [manager, secrets, phoneSecrets, locationPermission, loginItem, releases] in
+        let settings = SettingsWindow { [manager, secrets, phoneSecrets, locationPermission, loginItem, releases, updater] in
             AnyView(
                 SettingsView(
                     manager: manager,
@@ -80,7 +82,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     phoneSecrets: phoneSecrets,
                     locationPermission: locationPermission,
                     loginItem: loginItem,
-                    releases: releases
+                    releases: releases,
+                    updater: updater
                 )
             )
         }
@@ -88,6 +91,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = StatusItemController(manager: manager, status: status) { [weak settings] in
             settings?.show()
         }
+        // Step E: updates.
+        updater.start(automaticChecks: manager.config.automaticUpdates)
+        statusItem?.checkForUpdates = { [updater] in updater.checkForUpdates() }
         Task { await manager.reconcile() }
     }
 

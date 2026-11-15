@@ -139,6 +139,12 @@ struct Config: Codable, Equatable, Sendable {
     /// after dismissal.
     var lidCloseDefaultsNotice: LidCloseDefaultsChange?
 
+    // Step E
+    /// Let Sparkle look for a new release by itself, about once a day. It
+    /// only ever asks; nothing is downloaded or installed without a click.
+    /// Used only by a build that can update itself (`UpdaterAvailability`).
+    var automaticUpdates: Bool = true
+
     static let defaultPresets: [TimeInterval] = [
         30 * 60,
         1 * 3600,
@@ -227,6 +233,8 @@ struct Config: Codable, Equatable, Sendable {
         tmuxNudgePressesEnter = try c.decodeIfPresent(Bool.self, forKey: .tmuxNudgePressesEnter) ?? d.tmuxNudgePressesEnter
         launchAtLogin = try c.decodeIfPresent(Bool.self, forKey: .launchAtLogin) ?? d.launchAtLogin
         launchAtLoginInstall = try c.decodeIfPresent(String.self, forKey: .launchAtLoginInstall)
+        // Step E
+        automaticUpdates = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdates) ?? d.automaticUpdates
     }
 }
 

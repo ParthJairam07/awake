@@ -231,6 +231,142 @@ final class ReleaseScriptsTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: out.appendingPathComponent("Awake-1.2.4.zip").path))
     }
 
+    // MARK: - generate-appcast.sh
+
+    /// A zip of a scratch Awake.app whose Info.plist carries `publicKey`
+    /// as SUPublicEDKey (or none), as build-app.sh leaves it.
+    private func scratchZip(publicKey: String?) throws -> URL {
+        let app = try scratchBundle()
+        if let publicKey {
+            let add = try run(["-c", #"/usr/libexec/PlistBuddy -c "Add :SUPublicEDKey string $1" "$2" && /usr/bin/codesign --force --sign - "$3""#, "sh",
+                               publicKey, app.appendingPathComponent("Contents/Info.plist").path, app.path])
+            XCTAssertEqual(add.status, 0, add.output)
+        }
+        let zip = scratch.appendingPathComponent("Awake-1.2.3.zip")
+        let made = try run(["-c", #"/usr/bin/ditto -c -k --keepParent "$1" "$2""#, "sh", app.path, zip.path])
+        XCTAssertEqual(made.status, 0, made.output)
+        return zip
+    }
+
+    /// A tools folder whose generate_appcast records its arguments and the
+    /// key it was given on standard input, and writes a feed naming the
+    /// archive it found, signed unless `unsigned` exists beside it.
+    private func stubAppcastTools() throws -> URL {
+        let tools = scratch.appendingPathComponent("tools", isDirectory: true)
+        try FileManager.default.createDirectory(at: tools, withIntermediateDirectories: true)
+        try TestScripts.write("""
+            #!/bin/bash
+            here="$(cd "$(dirname "$0")" && pwd)"
+            /bin/cat > "$here/stdin"
+            printf '%s\\n' "$*" > "$here/args"
+            prefix=""
+            out=""
+            archives=""
+            while (( $# )); do
+              case "$1" in
+                --ed-key-file|--full-release-notes-url|--link) shift 2 ;;
+                --download-url-prefix) prefix="$2"; shift 2 ;;
+                -o) out="$2"; shift 2 ;;
+                *) archives="$1"; shift ;;
+              esac
+            done
+            name=""
+            for file in "$archives"/*.zip; do name="${file##*/}"; done
+            signature=' sparkle:edSignature="494Zy6a7NK1USGsGPy999rI5Leyg6UdEb3/R/L+cjETFGlZacU3z3A3qa2so7v75v/CKPo5HsqaUrxKTewbQCQ=="'
+            if [[ -e "$here/unsigned" ]]; then signature=""; fi
+            printf '<rss><channel><item><enclosure url="%s%s"%s/></item></channel></rss>\\n' "$prefix" "$name" "$signature" > "$out"
+
+            """, to: tools.appendingPathComponent("generate_appcast"))
+        return tools
+    }
+
+    // RFC 8032, section 7.1, test 1: an Ed25519 seed and its public key.
+    private let seed = Data([0x9d, 0x61, 0xb1, 0x9d, 0xef, 0xfd, 0x5a, 0x60, 0xba, 0x84, 0x4a, 0xf4, 0x92, 0xec, 0x2c, 0xc4,
+                             0x44, 0x49, 0xc5, 0x69, 0x7b, 0x32, 0x69, 0x19, 0x70, 0x3b, 0xac, 0x03, 0x1c, 0xae, 0x7f, 0x60]).base64EncodedString()
+    private let publicKey = Data([0xd7, 0x5a, 0x98, 0x01, 0x82, 0xb1, 0x0a, 0xb7, 0xd5, 0x4b, 0xfe, 0xd3, 0xc9, 0x64, 0x07, 0x3a,
+                                  0x0e, 0xe1, 0x72, 0xf3, 0xda, 0xa6, 0x23, 0x25, 0xaf, 0x02, 0x1a, 0x68, 0xf7, 0x07, 0x51, 0x1a]).base64EncodedString()
+
+    private func appcast(zip: URL, tools: URL, key: String?, output: URL, tag: String = "v1.2.3") throws -> (status: Int32, output: String) {
+        let script = Self.repoRoot.appendingPathComponent(".github/scripts/generate-appcast.sh")
+        var environment: [String: String] = [:]
+        if let key { environment["SPARKLE_PRIVATE_KEY"] = key }
+        return try run([script.path, "--zip", zip.path, "--tag", tag, "--repository", "ParthJairam07/awake", "--output", output.path, "--tools", tools.path],
+                       environment: environment)
+    }
+
+    /// The feed names the zip attached to the tag's release, and the key
+    /// reaches Sparkle's tool on standard input only: never an argument,
+    /// never in the output. The public key is derived with the real swift.
+    func testAppcastIsWrittenForTheTagsZipWithTheKeyOnStandardInput() throws {
+        let zip = try scratchZip(publicKey: publicKey)
+        let tools = try stubAppcastTools()
+        let output = scratch.appendingPathComponent("release/appcast.xml")
+
+        let r = try appcast(zip: zip, tools: tools, key: seed, output: output)
+
+        XCTAssertEqual(r.status, 0, r.output)
+        let feed = try String(contentsOf: output, encoding: .utf8)
+        XCTAssertTrue(feed.contains(#"url="https://github.com/ParthJairam07/awake/releases/download/v1.2.3/Awake-1.2.3.zip""#), feed)
+        XCTAssertEqual(try String(contentsOf: tools.appendingPathComponent("stdin"), encoding: .utf8), seed)
+        let args = try String(contentsOf: tools.appendingPathComponent("args"), encoding: .utf8)
+        XCTAssertTrue(args.hasPrefix("--ed-key-file - --download-url-prefix https://github.com/ParthJairam07/awake/releases/download/v1.2.3/ --full-release-notes-url https://github.com/ParthJairam07/awake/releases/tag/v1.2.3 --link https://github.com/ParthJairam07/awake/releases -o "), args)
+        XCTAssertFalse(args.contains(seed))
+        XCTAssertFalse(r.output.contains(seed), "the private key is never printed")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: scratch.appendingPathComponent("Library").path), "nothing cached under HOME")
+    }
+
+    /// A key that is not the pair of the public key in the app would sign a
+    /// feed every installed copy refuses. An app without a key, a feed
+    /// without a signature, a missing secret and an existing output all
+    /// stop before anything is written.
+    func testAppcastIsRefusedWhenTheKeysDoNotPairOrTheFeedIsUnsigned() throws {
+        let tools = try stubAppcastTools()
+        let output = scratch.appendingPathComponent("appcast.xml")
+        let exists = { FileManager.default.fileExists(atPath: output.path) }
+        let zip = try scratchZip(publicKey: publicKey)
+        let other = Data(repeating: 7, count: 32).base64EncodedString()
+
+        var r = try appcast(zip: zip, tools: tools, key: other, output: output)
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("does not belong to the public key in scripts/sparkle-public-key.txt (\(publicKey))"), r.output)
+        XCTAssertFalse(r.output.contains(other))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: tools.appendingPathComponent("stdin").path), "Sparkle's tool never ran")
+
+        r = try appcast(zip: zip, tools: tools, key: "not a key", output: output)
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("not the base64 of a 32-byte EdDSA seed"), r.output)
+
+        for missing in [nil, ""] as [String?] {
+            r = try appcast(zip: zip, tools: tools, key: missing, output: output)
+            XCTAssertEqual(r.status, 1, r.output)
+            XCTAssertTrue(r.output.contains("SPARKLE_PRIVATE_KEY is not set"), r.output)
+        }
+        XCTAssertEqual(try appcast(zip: zip, tools: tools, key: seed, output: output, tag: "1.2.3").status, 2, "the tag is v<version>")
+        XCTAssertEqual(try appcast(zip: zip, tools: scratch.appendingPathComponent("no-tools"), key: seed, output: output).status, 1)
+        XCTAssertFalse(exists())
+
+        FileManager.default.createFile(atPath: tools.appendingPathComponent("unsigned").path, contents: nil)
+        r = try appcast(zip: zip, tools: tools, key: seed, output: output)
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("carries no EdDSA signature"), r.output)
+        XCTAssertFalse(exists())
+        try FileManager.default.removeItem(at: tools.appendingPathComponent("unsigned"))
+
+        XCTAssertEqual(try appcast(zip: zip, tools: tools, key: seed, output: output).status, 0)
+        r = try appcast(zip: zip, tools: tools, key: seed, output: output)
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("already exists; refusing to replace it"), r.output)
+
+        try FileManager.default.removeItem(at: output)
+        try FileManager.default.removeItem(at: scratch.appendingPathComponent("dist"))
+        try FileManager.default.removeItem(at: zip)
+        let keyless = try scratchZip(publicKey: nil)
+        r = try appcast(zip: keyless, tools: tools, key: seed, output: output)
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("has no SUPublicEDKey"), r.output)
+        XCTAssertFalse(exists())
+    }
+
     // MARK: - signing-keychain.sh
 
     /// Only the argument and environment checks: a real run creates a

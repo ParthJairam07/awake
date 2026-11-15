@@ -525,6 +525,133 @@ final class PackagingTests: XCTestCase {
         }
     }
 
+    /// A binary that links Sparkle gets the framework copied into
+    /// Contents/Frameworks, symlinks kept, and every piece of nested code
+    /// signed on its own before the bundle, inside out, in the order
+    /// Sparkle documents; Downloader.xpc keeps its entitlements. A binary
+    /// that links it with no framework beside it stops the build. Checked
+    /// with a fake otool and a recording codesign.
+    func testBuildAppEmbedsSparkleAndSignsItsNestedCodeBeforeTheBundle() throws {
+        let fm = FileManager.default
+        let (script, calls) = try patchedBuildApp(recordingCodesign: true)
+        let otool = scratch.appendingPathComponent("bin/otool")
+        try TestScripts.write("#!/bin/bash\nprintf '\\t@rpath/Sparkle.framework/Versions/B/Sparkle (compatibility version 1.6.0)\\n'\n", to: otool)
+        var text = try String(contentsOf: script, encoding: .utf8).components(separatedBy: "\n")
+        let hits = text.indices.filter { text[$0].hasPrefix("OTOOL=") }
+        XCTAssertEqual(hits.count, 1)
+        text[hits[0]] = "OTOOL='\(otool.path)'"
+        try text.joined(separator: "\n").write(to: script, atomically: true, encoding: .utf8)
+        let out = scratch.appendingPathComponent("out", isDirectory: true)
+        let environment = ["PATH": "/usr/bin:/bin", "HOME": scratch.path]
+
+        var r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("links Sparkle.framework, but it is not beside the binary"), r.output)
+        XCTAssertFalse((try String(contentsOf: calls, encoding: .utf8)).contains("codesign"), "nothing was signed")
+
+        let framework = scratch.appendingPathComponent("binroot/Sparkle.framework", isDirectory: true)
+        for dir in ["Versions/B/XPCServices/Installer.xpc", "Versions/B/XPCServices/Downloader.xpc", "Versions/B/Updater.app"] {
+            try fm.createDirectory(at: framework.appendingPathComponent(dir), withIntermediateDirectories: true)
+        }
+        for file in ["Versions/B/Autoupdate", "Versions/B/Sparkle"] {
+            try Data("x".utf8).write(to: framework.appendingPathComponent(file))
+        }
+        try fm.createSymbolicLink(atPath: framework.appendingPathComponent("Versions/Current").path, withDestinationPath: "B")
+        try fm.createSymbolicLink(atPath: framework.appendingPathComponent("Sparkle").path, withDestinationPath: "Versions/Current/Sparkle")
+
+        let bundle = out.appendingPathComponent("Awake.app").path
+        let embedded = "\(bundle)/Contents/Frameworks/Sparkle.framework"
+        let pieces = ["Versions/B/XPCServices/Installer.xpc", "--preserve-metadata=entitlements \(embedded)/Versions/B/XPCServices/Downloader.xpc",
+                      "Versions/B/Autoupdate", "Versions/B/Updater.app", ""]
+        func nested(_ prefix: String) -> [String] {
+            pieces.map { piece in
+                if piece.hasPrefix("--") { return "\(prefix) \(piece)" }
+                return piece.isEmpty ? "\(prefix) \(embedded)" : "\(prefix) \(embedded)/\(piece)"
+            }
+        }
+        func codesignCalls() throws -> [String] {
+            try String(contentsOf: calls, encoding: .utf8).components(separatedBy: "\n").filter { $0.hasPrefix("codesign") }
+        }
+
+        try? fm.removeItem(at: calls)
+        r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try codesignCalls(), nested("codesign --force --sign -") + [
+            "codesign --force --sign - \(bundle)",
+            "codesign --verify --strict \(bundle)",
+            "codesign --verify --strict --deep \(bundle)",
+            "codesign -dvv \(bundle)",
+        ])
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: "\(embedded)/Versions/Current"), "B", "the framework's symlinks are kept")
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: "\(embedded)/Sparkle"), "Versions/Current/Sparkle")
+
+        try? fm.removeItem(at: calls)
+        let identity = "0123456789ABCDEF0123456789ABCDEF01234567"
+        let checkout = script.deletingLastPathComponent().deletingLastPathComponent()
+        let entitlements = checkout.appendingPathComponent("scripts/entitlements.plist")
+        try fm.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/entitlements.plist"), to: entitlements)
+        r = try run("/bin/bash", [script.path, "--output", out.path, "--sign-identity", identity], environment: environment)
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try codesignCalls(), nested("codesign --force --sign \(identity) --options runtime --timestamp") + [
+            "codesign --force --sign \(identity) --options runtime --timestamp --entitlements \(entitlements.path) \(bundle)",
+            "codesign --verify --strict \(bundle)",
+            "codesign --verify --strict --deep \(bundle)",
+            "codesign -dvv \(bundle)",
+        ], "nested code gets the runtime and a timestamp but not the app's entitlements")
+    }
+
+    /// The update key goes from scripts/sparkle-public-key.txt into the
+    /// bundle's Info.plist as SUPublicEDKey. An empty or missing file means
+    /// no key (the app then never starts Sparkle), and anything that is not
+    /// an EdDSA public key stops the build instead of shipping a bundle
+    /// that would refuse every update.
+    func testBuildAppWritesTheUpdateKeyOnlyWhenTheKeyFileHoldsOne() throws {
+        let (script, _) = try patchedBuildApp(recordingCodesign: true)
+        let out = scratch.appendingPathComponent("out", isDirectory: true)
+        let checkout = script.deletingLastPathComponent().deletingLastPathComponent()
+        let keyFile = checkout.appendingPathComponent("scripts/sparkle-public-key.txt")
+        let environment = ["PATH": "/usr/bin:/bin", "HOME": scratch.path]
+        func info() throws -> [String: Any] {
+            let data = try Data(contentsOf: out.appendingPathComponent("Awake.app/Contents/Info.plist"))
+            return try XCTUnwrap(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        }
+
+        for contents in [nil, "", "\n  \n"] as [String?] {
+            try? FileManager.default.removeItem(at: keyFile)
+            if let contents { try contents.write(to: keyFile, atomically: true, encoding: .utf8) }
+            let r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+            XCTAssertEqual(r.status, 0, r.output)
+            XCTAssertNil(try info()["SUPublicEDKey"], "no key for \(contents.map { "'\($0)'" } ?? "a missing file")")
+            XCTAssertTrue(r.output.contains("this build will not update itself"), r.output)
+            XCTAssertEqual(try info()["SUFeedURL"] as? String, "https://github.com/ParthJairam07/awake/releases/latest/download/appcast.xml")
+        }
+
+        let key = "oLs+QL40I8rnQvpZV8QTYgRII43U9qmdBrHWvQ5qUbY="
+        try (key + "\n").write(to: keyFile, atomically: true, encoding: .utf8)
+        var r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try info()["SUPublicEDKey"] as? String, key)
+
+        for bad in ["not a key", String(key.dropLast(2)), key + key, "<string>\(key)</string>"] {
+            try bad.write(to: keyFile, atomically: true, encoding: .utf8)
+            r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+            XCTAssertEqual(r.status, 1, "\(bad): \(r.output)")
+            XCTAssertTrue(r.output.contains("does not hold an EdDSA public key"), r.output)
+        }
+    }
+
+    /// The checked-in key file is empty until the owner generates a key, or
+    /// holds exactly one EdDSA public key. Anything else would stop every
+    /// build (see the test above).
+    func testTheCheckedInUpdateKeyFileIsEmptyOrOneKey() throws {
+        let text = try String(contentsOf: Self.repoRoot.appendingPathComponent("scripts/sparkle-public-key.txt"), encoding: .utf8)
+            .filter { !$0.isWhitespace }
+        if !text.isEmpty {
+            XCTAssertNotNil(text.range(of: #"^[A-Za-z0-9+/]{43}=$"#, options: .regularExpression), "scripts/sparkle-public-key.txt is not an EdDSA public key")
+            XCTAssertEqual(Data(base64Encoded: text)?.count, 32)
+        }
+    }
+
     /// Every file build-app.sh removes, creates or copies goes through its
     /// fixed-path tools: `rm`, `mkdir`, `cp` and `chmod` placed first on
     /// PATH are never run, and the recorded tools are.

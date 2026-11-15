@@ -377,7 +377,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         let names = Set(secretLines.flatMap { line in
             line.components(separatedBy: "secrets.").dropFirst().map { String($0.prefix { $0.isLetter || $0.isNumber || $0 == "_" }) }
         })
-        XCTAssertEqual(names, ["APPLE_CERTIFICATE_P12", "APPLE_CERTIFICATE_PASSWORD", "APPLE_ID", "APPLE_TEAM_ID", "APPLE_APP_PASSWORD"])
+        XCTAssertEqual(names, ["APPLE_CERTIFICATE_P12", "APPLE_CERTIFICATE_PASSWORD", "APPLE_ID", "APPLE_TEAM_ID", "APPLE_APP_PASSWORD", "SPARKLE_PRIVATE_KEY"])
 
         // Each step, as (name, lines up to the next step).
         var steps: [(name: String, body: [String])] = []
@@ -394,6 +394,7 @@ final class ReleaseWorkflowTests: XCTestCase {
             "Notarize and staple the disk image": "        if: steps.signing.outputs.notarize == 'true'",
             "Check Gatekeeper accepts the notarized build": "        if: steps.signing.outputs.notarize == 'true'",
             "Remove the temporary keychain": "        if: always() && steps.signing.outputs.developer_id == 'true'",
+            "Generate the update feed": "        if: steps.signing.outputs.appcast == 'true'",
         ]
         for (name, gate) in gates {
             let step = try XCTUnwrap(steps.first { $0.name == name }, "no step \(name)")
@@ -405,6 +406,11 @@ final class ReleaseWorkflowTests: XCTestCase {
         let decide = try XCTUnwrap(steps.first { $0.name == "Decide how this build is signed" }).body.joined(separator: "\n")
         XCTAssertTrue(decide.contains("HAVE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' }}"), "only whether the secret exists reaches the step")
         XCTAssertTrue(decide.contains("HAVE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}"))
+        XCTAssertTrue(decide.contains("HAVE_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}"))
+        XCTAssertTrue(decide.contains(#"if [[ "$CHANNEL" == stable ]]; then"#), "only a stable release carries the update feed")
+        let stable = try job("stable").joined(separator: "\n")
+        XCTAssertTrue(stable.contains("if [[ -f release/appcast.xml ]]; then\n            assets+=(release/appcast.xml)"), "the feed is published only when it was generated")
+        XCTAssertFalse(try job("nightly").joined(separator: "\n").contains("appcast"), "a nightly never replaces the feed")
         let order = steps.map(\.name)
         let index = { (name: String) in try XCTUnwrap(order.firstIndex(of: name), name) }
         XCTAssertLessThan(try index("Notarize and staple the app"), try index("Package"), "the zip and the disk image carry the stapled bundle")

@@ -29,6 +29,9 @@ name: Release
 #   APPLE_ID + APPLE_TEAM_ID + APPLE_APP_PASSWORD (and the certificate)
 #       present: the bundle and the disk image are notarized and stapled, and
 #       Gatekeeper's verdict is checked with spctl. absent: not notarized.
+#   SPARKLE_PRIVATE_KEY (and a public key in scripts/sparkle-public-key.txt)
+#       present: a stable release also carries appcast.xml, the signed update
+#       feed the app reads. absent: no feed; the app does not update itself.
 # Only the build job reads these secrets, and it has read-only access to the
 # repository. Every action is pinned to a commit.
 
@@ -214,10 +217,24 @@ jobs:
         env:
           HAVE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
           HAVE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+          HAVE_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
         run: |
           developer_id=false
           notarize=false
           signing=adhoc
+          # The update feed belongs to stable releases only: it is what
+          # releases/latest/download/appcast.xml serves.
+          appcast=false
+          if [[ "$CHANNEL" == stable ]]; then
+            if [[ "$HAVE_SPARKLE_KEY" != true ]]; then
+              echo "::notice::SPARKLE_PRIVATE_KEY is not set: this release carries no update feed (appcast.xml). See docs/releasing.md, Updates."
+            elif [[ -z "$(tr -d '[:space:]' < scripts/sparkle-public-key.txt)" ]]; then
+              echo "::warning::SPARKLE_PRIVATE_KEY is set but scripts/sparkle-public-key.txt is empty, so the app carries no update key and no feed is published. Commit the public key (docs/releasing.md, Updates)."
+            else
+              appcast=true
+            fi
+          fi
           if [[ "$HAVE_CERTIFICATE" == true ]]; then
             developer_id=true
             signing=developer-id
@@ -234,8 +251,9 @@ jobs:
             echo "developer_id=$developer_id"
             echo "notarize=$notarize"
             echo "signing=$signing"
+            echo "appcast=$appcast"
           } >> "$GITHUB_OUTPUT"
-          echo "signing: $signing"
+          echo "signing: $signing, update feed: $appcast"
 
       - name: Import the Developer ID certificate into a temporary keychain
         id: keychain
@@ -319,6 +337,18 @@ jobs:
           cat release/SHA256SUMS
           codesign -dvv dist/Awake.app 2>&1 | grep -E '^(Identifier|Signature|Authority|TeamIdentifier|CDHash|Runtime Version|Timestamp)=' || true
 
+      - name: Generate the update feed
+        # Sparkle's appcast.xml for this release, signed with the EdDSA key.
+        # generate-appcast.sh stops if the key is not the pair of the public
+        # key the app was built with.
+        if: steps.signing.outputs.appcast == 'true'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          PACKAGE: ${{ steps.version.outputs.package }}
+        run: |
+          .github/scripts/generate-appcast.sh --zip "release/$PACKAGE.zip" --tag "$GITHUB_REF_NAME" \
+            --repository "$GITHUB_REPOSITORY" --output release/appcast.xml
+
       - name: Upload the package as a workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -329,6 +359,7 @@ jobs:
             release/install.sh
             release/uninstall.sh
             release/SHA256SUMS
+            release/appcast.xml
           if-no-files-found: error
 
   stable:
@@ -437,7 +468,12 @@ jobs:
         run: |
           # --generate-notes appends GitHub's list of changes since the
           # previous release to notes.md.
-          gh release create "$GITHUB_REF_NAME" release/*.zip release/*.dmg release/install.sh release/uninstall.sh release/SHA256SUMS \
+          # appcast.xml is there only when the build job had the update key.
+          assets=(release/*.zip release/*.dmg release/install.sh release/uninstall.sh release/SHA256SUMS)
+          if [[ -f release/appcast.xml ]]; then
+            assets+=(release/appcast.xml)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
             --title "Awake $VERSION" \
             --notes-file notes.md \
