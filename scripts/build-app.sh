@@ -159,6 +159,10 @@ step "Assembling $APP"
 # bundle and only then runs this copy; an edited script fails that check.
 "$CP" "$ROOT/scripts/backstop.sh" "$APP/Contents/Resources/backstop.sh"
 "$CHMOD" 755 "$APP/Contents/Resources/backstop.sh"
+# install.sh too, sealed the same way, so the app's Setup window can hand
+# Terminal a script this build's signature covers (install.sh --sudoers-only).
+"$CP" "$ROOT/scripts/install.sh" "$APP/Contents/Resources/install.sh"
+"$CHMOD" 755 "$APP/Contents/Resources/install.sh"
 # Sparkle.framework (auto-updates). SwiftPM leaves the binary framework
 # beside the executable; the app looks for it in Contents/Frameworks (the
 # @executable_path/../Frameworks rpath in Package.swift). ditto keeps the

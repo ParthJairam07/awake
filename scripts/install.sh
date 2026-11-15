@@ -292,7 +292,7 @@ CANDIDATE=""
 CANDIDATE_DIR=""
 WORK=""
 
-usage() { echo "usage: $0 [--latest | --app /path/to/Awake.app [--allow-unverified-origin]]" >&2; }
+usage() { echo "usage: $0 [--latest | --sudoers-only | --app /path/to/Awake.app [--allow-unverified-origin]]" >&2; }
 # A command for the user to paste, each word quoted for the shell, so a space,
 # quote or $ in a path stays part of that path.
 command_line() { local line; line="$(printf '%q ' "$@")"; printf '%s' "${line% }"; }
@@ -409,8 +409,15 @@ loaded_state() { # -> yes | no | unknown:<rc>
 
 PREBUILT=""
 ALLOW_UNVERIFIED_ORIGIN=0
+# --sudoers-only: write and verify /etc/sudoers.d/awake (step 2) and stop.
+# The app's Setup window opens Terminal with this for an app that is already
+# in place (Homebrew, a disk image): the app loads its own recovery agent,
+# so the rule is the one thing left that needs the password. No bundle is
+# built, checked, copied or replaced, and the running app is not asked to quit.
+SUDOERS_ONLY=0
 while (( $# )); do
   case "$1" in
+    --sudoers-only) SUDOERS_ONLY=1; shift ;;
     --app) [[ $# -ge 2 ]] || { usage; exit 2; }; PREBUILT="$2"; shift 2 ;;
     --allow-unverified-origin) ALLOW_UNVERIFIED_ORIGIN=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -419,6 +426,11 @@ while (( $# )); do
 done
 if (( ALLOW_UNVERIFIED_ORIGIN )) && [[ -z "$PREBUILT" ]]; then
   echo "--allow-unverified-origin applies to --app only; a source build has no download to vouch for." >&2
+  usage
+  exit 2
+fi
+if (( SUDOERS_ONLY )) && [[ -n "$PREBUILT" || $ALLOW_UNVERIFIED_ORIGIN -eq 1 ]]; then
+  echo "--sudoers-only installs no bundle, so it takes neither --app nor --allow-unverified-origin." >&2
   usage
   exit 2
 fi
@@ -536,7 +548,9 @@ WORK="$("$MKTEMP" -d "${TMPDIR:-/tmp}/awake-install.XXXXXX")"
 # 1. The bundle to install ---------------------------------------------------
 #    Built or verified before the password prompt: nothing on the machine has
 #    changed when this step fails.
-if [[ -n "$PREBUILT" ]]; then
+if (( SUDOERS_ONLY )); then
+  : # no bundle in this mode
+elif [[ -n "$PREBUILT" ]]; then
   step "Checking the prebuilt bundle $PREBUILT"
   # Release bundles are built for arm64 only (the Release workflow runs on
   # Apple Silicon). hw.optional.arm64 describes the hardware, so a shell
@@ -647,6 +661,10 @@ rule_rc=0
 pmset_rule_effective || rule_rc=$?
 if (( rule_rc == 0 )); then
   echo "sudoers rule verified"
+  if (( SUDOERS_ONLY )); then
+    echo "Done. Nothing else was changed: go back to Awake and press Check again."
+    exit 0
+  fi
 elif (( rule_rc == 124 )); then
   echo "'sudo -n -l', which checks the rule, did not answer within ${CALL_TIMEOUT_SECONDS}s, so the rule in $SUDOERS is not verified. The app (with backstop.sh) and the LaunchAgent were not touched; rerun once sudo answers." >&2
   exit 1

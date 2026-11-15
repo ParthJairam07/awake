@@ -322,6 +322,7 @@ final class PackagingTests: XCTestCase {
             try fm.copyItem(at: Self.repoRoot.appendingPathComponent("Resources/\(name)"), to: checkout.appendingPathComponent("Resources/\(name)"))
         }
         try fm.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/backstop.sh"), to: checkout.appendingPathComponent("scripts/backstop.sh"))
+        try fm.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/install.sh"), to: checkout.appendingPathComponent("scripts/install.sh"))
         try fm.copyItem(atPath: "/usr/bin/true", toPath: binroot.appendingPathComponent("Awake").path)
 
         func fake(_ name: String, _ body: String) throws -> URL {
@@ -680,6 +681,8 @@ final class PackagingTests: XCTestCase {
             "cp \(checkout)/Resources/AppIcon.icns \(app)/Contents/Resources/AppIcon.icns",
             "cp \(checkout)/scripts/backstop.sh \(app)/Contents/Resources/backstop.sh",
             "chmod 755 \(app)/Contents/Resources/backstop.sh",
+            "cp \(checkout)/scripts/install.sh \(app)/Contents/Resources/install.sh",
+            "chmod 755 \(app)/Contents/Resources/install.sh",
         ] {
             XCTAssertTrue(recorded.contains(call), "\(call) not in \(recorded)")
         }
