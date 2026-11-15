@@ -504,7 +504,8 @@
       fact(facts, 'Status', 'waiting for the Mac…');
     } else {
       var battery = status.batteryPercent == null ? 'unknown' : status.batteryPercent + '%';
-      if (status.batteryPercent == null) fact(facts, 'Battery', 'unknown');
+      // No reading (a desktop Mac, or a failed read): the Machine tab says which.
+      if (status.batteryPercent == null) { /* no line */ }
       else if (status.chargerDraining) fact(facts, 'Battery', battery + ', charger too weak', 'warn');
       else fact(facts, 'Battery', battery + (status.isCharging ? ', on power' : ', on battery'), !status.isCharging && status.batteryPercent != null && status.batteryPercent < 20 ? 'bad' : null);
       fact(facts, 'Lid', status.lidClosed ? (status.lidOnDesk ? 'closed, external display' : 'closed') : 'open');

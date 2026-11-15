@@ -701,7 +701,7 @@ final class StatusItemController: NSObject {
     /// the code and its QR code in the Phone app section.
     @objc private func menuPairPhone() {
         manager.services?.phone?.auth.beginPairing()
-        openSettings()
+        menuOpenSettings()
     }
 
     @objc private func menuStopWaitingForOutput(_ sender: NSMenuItem) {

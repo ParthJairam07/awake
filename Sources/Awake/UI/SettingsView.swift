@@ -27,17 +27,28 @@ struct SettingsView: View {
     @State private var wouldFreeze: [String] = []
 
     var body: some View {
-        Form {
-            sessionSection
-            lidSection
-            agentSection
-            powerSection
-            networkSection
-            phoneSection
-            phoneAppSection
-            appSection
+        ScrollViewReader { scroll in
+            Form {
+                sessionSection
+                lidSection
+                agentSection
+                powerSection
+                networkSection
+                phoneSection
+                phoneAppSection
+                appSection
+            }
+            .formStyle(.grouped)
+            // The menu's "Pair phone…" opens Settings for the code: bring
+            // the Phone app section into view when a pairing window opens.
+            .onChange(of: phoneApp?.auth.pairingWindow?.code, initial: true) { _, code in
+                guard code != nil else { return }
+                Task { @MainActor in
+                    try? await Task.sleep(for: .milliseconds(150))
+                    withAnimation { scroll.scrollTo(Self.phoneAppAnchor, anchor: .top) }
+                }
+            }
         }
-        .formStyle(.grouped)
         .frame(width: 520)
         .frame(minHeight: 560, idealHeight: 720)
         .onAppear {
@@ -571,6 +582,8 @@ struct SettingsView: View {
         )
     }
 
+    static let phoneAppAnchor = "phone-app"
+
     @ViewBuilder
     private var phoneAppSection: some View {
         Section {
@@ -578,6 +591,7 @@ struct SettingsView: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
             Toggle("Phone app", isOn: phoneAppBinding(\.phoneApp))
+                .id(Self.phoneAppAnchor)
             Stepper(value: phoneAppBinding(\.phonePort), in: 1024...65535, step: 1) {
                 LabeledContent("Port", value: "\(manager.config.phonePort)")
             }
