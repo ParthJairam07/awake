@@ -3,10 +3,11 @@
 # source installs, and .github/workflows/release.yml runs it for the
 # downloadable package, so both produce the same bundle.
 #
-# Usage: scripts/build-app.sh --output DIR [--version X.Y.Z[-suffix]]
+# Usage: scripts/build-app.sh [--output DIR] [--version X.Y.Z[-suffix]]
 #                             [--sign-identity IDENTITY]
 #   Writes DIR/Awake.app, replacing a bundle already at that path. DIR is
-#   created if needed. Prints the bundle path last.
+#   created if needed; without --output it is the caller's current
+#   directory. Prints the bundle path last.
 #
 #   --version        written into the bundle's Info.plist as
 #                    CFBundleShortVersionString and CFBundleVersion. The
@@ -41,20 +42,19 @@ CHMOD=/bin/chmod
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-usage() { echo "usage: $0 --output DIR [--version X.Y.Z[-suffix]] [--sign-identity IDENTITY]" >&2; }
-OUTPUT=""
+usage() { echo "usage: $0 [--output DIR] [--version X.Y.Z[-suffix]] [--sign-identity IDENTITY]" >&2; }
+OUTPUT="."
 VERSION=""
 SIGN_IDENTITY=""
 while (( $# )); do
   case "$1" in
-    --output) [[ $# -ge 2 ]] || { usage; exit 2; }; OUTPUT="$2"; shift 2 ;;
+    --output) [[ $# -ge 2 && -n "$2" ]] || { usage; exit 2; }; OUTPUT="$2"; shift 2 ;;
     --version) [[ $# -ge 2 && -n "$2" ]] || { usage; exit 2; }; VERSION="$2"; shift 2 ;;
     --sign-identity) [[ $# -ge 2 && -n "$2" ]] || { usage; exit 2; }; SIGN_IDENTITY="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
-[[ -n "$OUTPUT" ]] || { usage; exit 2; }
 # Checked before anything is built: three numbers, and optionally a suffix of
 # letters, digits, dots and hyphens (0.0.0-ci). It goes into a plist and into
 # file names, so nothing else is accepted.

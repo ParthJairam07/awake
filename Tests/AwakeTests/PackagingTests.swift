@@ -432,6 +432,23 @@ final class PackagingTests: XCTestCase {
         XCTAssertEqual(URL(fileURLWithPath: printed).resolvingSymlinksInPath(), bundle.resolvingSymlinksInPath(), "the printed path is absolute")
     }
 
+    /// Without --output the bundle lands in the caller's directory, so
+    /// `./scripts/build-app.sh` from a checkout leaves ./Awake.app (which
+    /// .gitignore covers) and ci.yml's dry run needs no folder of its own.
+    func testBuildAppWithoutOutputWritesIntoTheCallersDirectory() throws {
+        let (script, _) = try patchedBuildApp(recordingCodesign: true)
+        let caller = scratch.appendingPathComponent("here", isDirectory: true)
+        try FileManager.default.createDirectory(at: caller, withIntermediateDirectories: true)
+
+        let r = try run("/bin/bash", [script.path, "--version", "0.0.0-ci"], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path], currentDirectory: caller)
+
+        XCTAssertEqual(r.status, 0, r.output)
+        let bundle = caller.appendingPathComponent("Awake.app")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/Info.plist").path), r.output)
+        let printed = try XCTUnwrap(r.output.components(separatedBy: "\n").filter { !$0.isEmpty }.last)
+        XCTAssertEqual(URL(fileURLWithPath: printed).resolvingSymlinksInPath(), bundle.resolvingSymlinksInPath())
+    }
+
     /// The signature is ad-hoc whatever the environment says: an
     /// AWAKE_SIGN_IDENTITY left over from older instructions changes
     /// nothing, and nothing asks for the hardened runtime or a timestamp.
@@ -689,9 +706,11 @@ final class PackagingTests: XCTestCase {
         XCTAssertTrue(recorded.contains { $0.hasPrefix("cp ") && $0.hasSuffix(" \(app)/Contents/MacOS/Awake") }, "\(recorded)")
     }
 
-    func testBuildAppNeedsAnOutputDirectory() throws {
+    /// --output may be left out (the caller's directory, tested above), but
+    /// not given without a value or with an empty one.
+    func testBuildAppRefusesAnOutputFlagWithoutADirectory() throws {
         let (script, calls) = try patchedBuildApp(recordingCodesign: true)
-        for args in [[String](), ["--output"], ["--bogus", "x"]] {
+        for args in [["--output"], ["--output", ""], ["--bogus", "x"]] {
             let r = try run("/bin/bash", [script.path] + args, environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
             XCTAssertEqual(r.status, 2, "\(args): \(r.output)")
             XCTAssertTrue(r.output.contains("usage:"), r.output)
