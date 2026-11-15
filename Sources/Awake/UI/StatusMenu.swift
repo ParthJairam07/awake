@@ -23,6 +23,8 @@ enum StatusMenu {
             /// save the item was built for, its save ID included, so a
             /// later one is not dropped.
             case stopWaitingForOutput(SavedAudioOutput)
+            /// Open Settings with a phone pairing code showing (phase 3).
+            case pairPhone
         }
 
         let title: String
@@ -31,6 +33,7 @@ enum StatusMenu {
 
     static let settingsTitle = "Settings\u{2026}"
     static let quitTitle = "Quit Awake"
+    static let pairPhoneTitle = "Pair phone\u{2026}"
 
     /// Disabled status lines, a separator, then Settings… and Quit. Empty
     /// lines are dropped, and the separator only appears when something
@@ -58,7 +61,8 @@ enum StatusMenu {
         commandRunning: String? = nil,
         foreignSleep: String? = nil,
         outputsWaiting: [SavedAudioOutput] = [],
-        lidSimulationBuild: Bool = false
+        lidSimulationBuild: Bool = false,
+        phone: (text: String, isWarning: Bool)? = nil
     ) -> [Item] {
         var out: [Item] = []
         if let held = SleepHeldLine.line(sessionActive: sessionActive, sleepHeld: sleepHeld) {
@@ -72,6 +76,11 @@ enum StatusMenu {
         }
         if lidSimulationBuild {
             out.append(Item(title: LidSimulationBuild.marker, kind: .warning))
+        }
+        // The phone app's line and its pairing item, only while it is on.
+        if let phone, let text = present(phone.text) {
+            out.append(Item(title: text, kind: phone.isWarning ? .warning : .info))
+            out.append(Item(title: pairPhoneTitle, kind: .pairPhone))
         }
         if let throttle = present(StatusLines.throttleWarning(throttledBrowsers.map(\.name))) {
             out.append(Item(title: throttle, kind: .warning))
@@ -129,7 +138,8 @@ enum StatusMenu {
         settings: Selector,
         quit: Selector,
         relaunchBrowser: Selector,
-        stopWaitingForOutput: Selector
+        stopWaitingForOutput: Selector,
+        pairPhone: Selector? = nil
     ) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -161,6 +171,9 @@ enum StatusMenu {
                 let entry = action(title: item.title, selector: stopWaitingForOutput, key: "", target: target)
                 entry.representedObject = waiting
                 menu.addItem(entry)
+            case .pairPhone:
+                guard let pairPhone else { continue }
+                menu.addItem(action(title: item.title, selector: pairPhone, key: "", target: target))
             }
         }
         return menu

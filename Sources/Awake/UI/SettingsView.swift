@@ -34,6 +34,7 @@ struct SettingsView: View {
             powerSection
             networkSection
             phoneSection
+            phoneAppSection
             appSection
         }
         .formStyle(.grouped)
@@ -552,6 +553,42 @@ struct SettingsView: View {
             Text("Phone alerts")
         }
         .task { await phone.load(from: phoneSecrets) }
+    }
+
+    // MARK: Phone app (phase 3)
+
+    private var phoneApp: PhoneAppController? { manager.services?.phone }
+
+    /// The switch and the port go through the config like every other
+    /// setting, and the server follows at once.
+    private func phoneAppBinding<T: Equatable>(_ keyPath: WritableKeyPath<Config, T>) -> Binding<T> {
+        Binding(
+            get: { manager.config[keyPath: keyPath] },
+            set: { value in
+                update { $0[keyPath: keyPath] = value }
+                phoneApp?.apply(manager.config)
+            }
+        )
+    }
+
+    @ViewBuilder
+    private var phoneAppSection: some View {
+        Section {
+            Text("A web app for your phone, served by this Mac over Tailscale: time left, extend, end, lock, a screenshot, the machine's readings and the log. Only paired phones on your tailnet can reach it; nothing listens on the Wi-Fi network.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+            Toggle("Phone app", isOn: phoneAppBinding(\.phoneApp))
+            Stepper(value: phoneAppBinding(\.phonePort), in: 1024...65535, step: 1) {
+                LabeledContent("Port", value: "\(manager.config.phonePort)")
+            }
+            if let phoneApp {
+                PhoneAppSettings(phone: phoneApp, auth: phoneApp.auth, enabled: manager.config.phoneApp)
+            } else {
+                Text("The phone app is not available in this run.").font(.caption).foregroundStyle(.secondary)
+            }
+        } header: {
+            Text("Phone app")
+        }
     }
 
     private var appSection: some View {
