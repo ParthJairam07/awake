@@ -285,41 +285,6 @@ random name, and type the same topic in Setup or in Settings > Phone alerts;
 "Send test" checks it. Pushover works too. Tokens are kept in the login
 keychain, never in `config.json`. A summary is sent when a session ends.
 
-## Agents
-
-*Landing in this release.* Awake learns which agents are running and what
-state each is in, so an alert can say "agent three is waiting on a prompt"
-instead of "the timer has 40 minutes left":
-
-- **Agent registry.** Finds agent processes by bundle id or command line
-  (Claude Code, Codex, Cursor, Aider, Devin CLI, Ollama, LM Studio), and
-  tmux panes you mark.
-- **Per-agent state.** Alive, CPU, memory, how long since it last produced
-  output, waiting for input, stalled, exited.
-- **Prompt and dialog detector.** Uses the Accessibility permission to read
-  the sheets and dialogs that block an agent (Gatekeeper, permission
-  prompts, keychain, sudo) and sends their text and buttons to the phone.
-- **Hooks.** Configs for Claude Code (`Notification`, `Stop`) and Codex
-  notify that post to Awake's local endpoint.
-- **Before an early end.** Ahead of a battery or heat end, agents get a save
-  signal and, if you opt in, each repo gets `git commit -am wip && git push`.
-- **Priority.** Under battery, heat or memory pressure, low-priority agents
-  are paused first, with the same journaled, identity-checked pause the
-  freeze list uses.
-
-## Leases
-
-*Landing in this release.* Agents can ask for awake time themselves:
-
-```bash
-awake lease --for 2h --reason "refactor billing"
-```
-
-The same request is available as an MCP tool, so an agent calls it without a
-shell. The Mac stays awake while any lease is held, capped by a maximum you
-set, and the session ends when the last lease is released or expires. Each
-lease has an owner, a reason and an expiry.
-
 ## Privacy
 
 There are no servers of ours. Awake sends nothing anywhere unless you
