@@ -623,7 +623,7 @@ struct SettingsView: View {
             Toggle("Before a battery, heat or planned end, post \"Session ending\"", isOn: bind(\.preEndHooks))
             Toggle("Also commit and push work in progress in each agent repo", isOn: bind(\.wipCommitOnEnd))
                 .disabled(!manager.config.preEndHooks)
-            Text("Runs git add -A, git commit -m \"\(AgentGit.wipMessage)\" and git push in each repo an agent works in, on the branch that is checked out, up to \(Int(AgentGit.wipTimeout)) s per repo. Never forces, never uses sudo. Both are off by default.")
+            Text("Runs git add -A, git commit -m \"\(AgentGit.wipMessage)\" (commit hooks skipped) and git push in each repo an agent works in, on the branch that is checked out, up to \(Int(AgentGit.wipTimeout)) s per repo. Never forces, never uses sudo. Both are off by default.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Toggle("Pause low-priority agents under battery, heat or memory pressure", isOn: bind(\.priorityPause))
