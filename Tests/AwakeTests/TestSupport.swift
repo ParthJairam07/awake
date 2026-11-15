@@ -345,6 +345,25 @@ final class FakeProcessControl: ProcessSignaling, @unchecked Sendable {
         }
     }
 
+    private var _terminated: [Int32] = []
+    private var _notTheSame: Set<Int32> = []
+    /// Pids SIGTERM was delivered to.
+    var terminated: [Int32] { lock.withLock { _terminated } }
+    /// Pids the fake kernel reports as gone or reused.
+    var notTheSame: Set<Int32> {
+        get { lock.withLock { _notTheSame } }
+        set { lock.withLock { _notTheSame = newValue } }
+    }
+
+    func terminate(_ process: FrozenProcess) -> TerminateResult {
+        lock.withLock {
+            guard process.identity != nil else { return .failed }
+            guard !_notTheSame.contains(process.pid) else { return .notTheSameProcess }
+            _terminated.append(process.pid)
+            return .sent
+        }
+    }
+
     /// Caller holds `lock`.
     private func sigcont(_ pid: Int32, into report: inout ResumeReport) {
         if _failResume.contains(pid) {

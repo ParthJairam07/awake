@@ -199,6 +199,25 @@ is still there.
 Never paused: an agent at a `sudo` password prompt, an agent with `sudo`
 running anywhere under it, and agents known only from hooks (no process).
 
+## From the phone
+
+With the [phone app](phone.md) on, the Agents tab can act on an agent
+while a session runs. Nudge (Enter) and Answer (one line of at most 500
+characters, typed literally, then Enter) go to the agent's tmux pane and
+only if that pane is marked, alive and not in copy mode; anything else is
+refused with "agent is not in a marked tmux pane". Pause and Resume use
+the priority pause's stops: journaled before the signal, tied to each
+process's start time, never an agent with `sudo` under it, and undone by
+the session's end, a lid open, the recovery agent or the next launch. An
+agent paused from the phone stays paused when pressure clears; one the
+priority pause stopped can be resumed from the phone and is paused again
+if the pressure is still there. Stop sends SIGTERM to the agent's root
+process only, after checking that the pid is still the process Awake
+tracked (a paused agent is resumed first, so it can act on the signal);
+it is refused for an agent known only from hooks. The phone API records
+every action in the audit log, with the length of an answer, never its
+text.
+
 ## Hooks
 
 Hooks are the exact signal: the agent itself says "I need permission" or

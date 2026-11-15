@@ -47,10 +47,24 @@ until you turn it on, and it is reachable only over
 | Tab | What is there |
 | --- | --- |
 | Session | Time left, +30 m / +1 h / +2 h, End, and Start with your presets or a number of minutes |
-| Agents | One card per agent with its state, last output, repository and the prompt it is waiting on; Nudge, Answer, Pause, Resume, Stop, each confirmed. Empty until the agent layer is in the build. |
+| Agents | One card per agent with its state, last output, repository and the prompt it is waiting on; Nudge, Answer, Pause, Resume, Stop, each confirmed. |
 | Machine | Battery and its trend in watts, charger, heat, CPU speed limit, battery temperature, memory pressure, free disk, network and Wi-Fi name, Tailscale address, lid, Low Power Mode |
 | Security | Lock now, a screenshot (pinch to zoom, optional refresh every 5 s), the paired phones, and Panic (hold): lock the Mac and end the session, which resumes everything Awake froze |
 | Log | The end of Awake's log, refreshed as you watch |
+
+What the Agents tab can do to an agent, while a session runs: **Nudge**
+sends Enter to its tmux pane and **Answer** types one line (up to 500
+characters, no control characters) followed by Enter, both only into a
+pane you marked (`tmux set-option -p @awake 1` or an `awake:` title) that
+is alive and not in copy mode. **Pause** stops the agent's processes
+(SIGSTOP) and **Resume** continues them (SIGCONT), through the same
+journal as the priority pause, so the session's end, a lid open, the
+recovery agent or the next launch resumes a paused agent if you do not.
+**Stop** sends SIGTERM to the agent's main process only, never SIGKILL,
+and only if it is still the process Awake has been tracking. An agent
+known only from hooks has no process and no pane, so it can only be
+watched; an agent with `sudo` under it is not paused. Nothing here runs
+`sudo`. See [agents.md](agents.md#from-the-phone).
 
 The page stays live over one long-lived connection (server-sent events)
 and reconnects with a growing delay; while it cannot reach the Mac it

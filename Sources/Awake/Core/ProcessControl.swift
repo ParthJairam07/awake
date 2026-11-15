@@ -31,6 +31,18 @@ protocol ProcessSignaling: Sendable {
     /// process just sent; a journaled entry from an earlier run goes
     /// through `resume`, which signals only a stopped process.
     func cancelStops(_ processes: [FrozenProcess]) -> ResumeReport
+    /// SIGTERM one process, only if it is still the same process (identity
+    /// to the microsecond, boot session), looked up right before the
+    /// signal. Never an entry without identity.
+    func terminate(_ process: FrozenProcess) -> TerminateResult
+}
+
+enum TerminateResult: Sendable, Equatable {
+    case sent
+    /// Exited, or the pid belongs to another process now.
+    case notTheSameProcess
+    /// No identity to compare, the kernel would not say, or kill failed.
+    case failed
 }
 
 struct SuspendReport: Sendable, Equatable {
@@ -121,6 +133,23 @@ struct SignalProcessControl: ProcessSignaling {
 
     func cancelStops(_ processes: [FrozenProcess]) -> ResumeReport {
         continueEach(processes) { Self.cancelDecision($0, stateLookup: stateLookup) }
+    }
+
+    func terminate(_ process: FrozenProcess) -> TerminateResult {
+        // The same ownership rule as an undo of a fresh stop: identity
+        // must match, stopped or not.
+        switch Self.cancelDecision(process, stateLookup: stateLookup) {
+        case .gone:
+            return .notTheSameProcess
+        case .unverifiable, .unobserved:
+            return .failed
+        case .signal:
+            let err = send(process.pid, SIGTERM)
+            if err == 0 { return .sent }
+            if err == ESRCH { return .notTheSameProcess }
+            Log.error("SIGTERM \(process.pid) failed: \(String(cString: strerror(err)))")
+            return .failed
+        }
     }
 
     /// SIGCONT per process as `decide` says, each signal right after that

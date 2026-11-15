@@ -64,6 +64,7 @@ final class AppServices {
     private let display: any DisplayDimming
     private let keyboard: any KeyboardBacklighting
     private let freezer: any Freezing
+    private let processControl: any ProcessSignaling
     private let docker: DockerRule
     private let keychain: any KeychainStoring
     private let lid = LidObserver()
@@ -144,6 +145,7 @@ final class AppServices {
         self.lidSimulation = lidSimulation
         self.lidSimulationEnabled = lidSimulationEnabled
         self.sampler = BrightnessSampler(display: display, keyboard: keyboard, idleSeconds: idleSeconds)
+        self.processControl = processControl
         self.freezer = Freezer(control: processControl)
         self.docker = DockerRule(freezer: freezer)
         self.keychain = keychain
@@ -614,6 +616,8 @@ final class AppServices {
     struct AgentDependencies {
         var probe: any AgentProcessProbing = LiveAgentProbe()
         var tmux: any TmuxReading = LiveTmuxReader()
+        /// Keys for the phone's Nudge and Answer.
+        var tmuxTyping: any TmuxTyping = LiveTmuxTyper()
         var git = AgentGit()
         var dialogs: any DialogProbing = AXDialogProbe()
         var idleSeconds: @Sendable () -> Double = { UserInput.secondsSinceLastInput() }
@@ -629,6 +633,7 @@ final class AppServices {
     private(set) var dialogWatcher: DialogWatcher?
     private(set) var preEnd: PreEndRunner?
     private(set) var agentPauser: AgentPauser?
+    private(set) var agentActions: AgentActions?
     private let hookSocket = HookSocketServer()
     private var memoryCritical = false
     /// The manager `startAgents` wired, so `stopAgents` unwires the same.
@@ -686,9 +691,17 @@ final class AppServices {
             await self?.agentTracker?.refreshUnpushed()
         }
 
-        agentPauser = AgentPauser(manager: manager, freezer: freezer, notifier: notifier) { [weak self] in
+        let pauser = AgentPauser(manager: manager, freezer: freezer, notifier: notifier) { [weak self] in
             self?.agentTracker?.agents ?? []
         }
+        agentPauser = pauser
+        // Phase 3: what the phone may do to these agents, for as long as
+        // the session runs.
+        let actions = AgentActions(manager: manager, pauser: pauser, tmux: deps.tmux, typer: deps.tmuxTyping, control: processControl) { [weak self] in
+            self?.agentTracker?.agents
+        }
+        agentActions = actions
+        phone?.agentActions = actions
         memoryCritical = false
     }
 
@@ -706,6 +719,8 @@ final class AppServices {
         preEnd = nil
         agentPauser?.stop()
         agentPauser = nil
+        agentActions = nil
+        phone?.agentActions = UnavailableAgentActions()
         memoryCritical = false
         status.agents = []
     }
@@ -756,8 +771,15 @@ final class AppServices {
             machine: LivePhoneMachine(services: self),
             refreshStatus: { [weak self] in self?.refreshInstant() }
         )
-        phone = controller
+        attachPhone(controller)
         controller.apply(manager.config)
+    }
+
+    /// Makes `controller` the phone app. A session already running (found
+    /// by the reconcile) had its agents wired before the phone existed.
+    func attachPhone(_ controller: PhoneAppController) {
+        phone = controller
+        if let agentActions { controller.agentActions = agentActions }
     }
 
     /// The Wi-Fi name for the phone's Machine tab; the menu reads it the

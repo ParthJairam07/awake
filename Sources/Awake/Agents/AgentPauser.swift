@@ -89,6 +89,10 @@ final class AgentPauser {
     private let stepInterval: TimeInterval
     /// In pause order.
     private(set) var paused: [Paused] = []
+    /// Paused by hand (the phone), in pause order. The pressure clearing
+    /// does not resume these; the phone, a lid open or the session's end
+    /// does.
+    private(set) var held: [Paused] = []
     private var lastStep: Date?
     private var tail: Task<Void, Never>?
 
@@ -125,7 +129,44 @@ final class AgentPauser {
         tail?.cancel()
         tail = nil
         paused = []
+        held = []
         lastStep = nil
+    }
+
+    // MARK: By hand
+
+    /// Whether Awake holds a stop of this agent, from pressure or by hand.
+    func isPaused(_ id: String) -> Bool {
+        if let manager { dropWhatTheJournalNoLongerHolds(manager) }
+        return (paused + held).contains { $0.id == id }
+    }
+
+    /// Pause one agent by hand, through the same journaled stop as the
+    /// priority pause. nil when it is paused, else why it is not.
+    func hold(_ agent: AgentRecord) async -> String? {
+        guard let manager, manager.isActive else { return "no session is running" }
+        guard !isPaused(agent.id) else { return nil }
+        let stopped = await stop(agent, manager: manager, what: "pause by hand")
+        guard !stopped.isEmpty else { return "\(agent.label) could not be paused; it was left running" }
+        held.append(Paused(id: agent.id, name: agent.label, processes: stopped))
+        return nil
+    }
+
+    /// Resume one agent Awake paused, by hand or under pressure. nil when
+    /// it runs again, else why it does not.
+    func release(id: String) async -> String? {
+        guard let manager else { return "no session is running" }
+        let entries = (paused + held).filter { $0.id == id }
+        guard !entries.isEmpty else { return "it is not paused by Awake" }
+        guard let failed = await resume(entries, manager: manager, what: "resume by hand") else {
+            return "Awake is busy with another change; try again"
+        }
+        guard failed == 0 else {
+            return "\(failed) process(es) could not be resumed and stay journaled; the next lid open or session end retries them"
+        }
+        paused.removeAll { $0.id == id }
+        held.removeAll { $0.id == id }
+        return nil
     }
 
     private func evaluate(pressure: Set<AgentPressure>) async {
@@ -138,7 +179,7 @@ final class AgentPauser {
         }
         let now = clock()
         if let lastStep, now.timeIntervalSince(lastStep) < stepInterval { return }
-        let tier = PausePlanner.nextTier(agents: agents(), paused: Set(paused.map(\.id)), config: config)
+        let tier = PausePlanner.nextTier(agents: agents(), paused: Set((paused + held).map(\.id)), config: config)
         guard !tier.isEmpty else { return }
         lastStep = now
         var names: [String] = []
@@ -156,12 +197,23 @@ final class AgentPauser {
         let journaled = Set(manager.state.frozenPids)
         let before = paused.count
         paused.removeAll { entry in !entry.processes.contains { journaled.contains($0.pid) } }
+        held.removeAll { entry in !entry.processes.contains { journaled.contains($0.pid) } }
         if paused.count != before { lastStep = nil }
     }
 
-    /// One agent, journal first. True when at least one of its processes
+    /// One agent under pressure. True when at least one of its processes
     /// was stopped.
     private func pause(_ agent: AgentRecord, manager: SessionManager) async -> Bool {
+        let stopped = await stop(agent, manager: manager, what: "priority pause")
+        guard !stopped.isEmpty else { return false }
+        paused.append(Paused(id: agent.id, name: agent.label, processes: stopped))
+        return true
+    }
+
+    /// The one journaled stop: journal first, without identity, then the
+    /// signals, then the confirmed stops with identity. Returns what was
+    /// stopped; `what` names the caller in the log.
+    private func stop(_ agent: AgentRecord, manager: SessionManager, what: String) async -> [FrozenProcess] {
         var stopped: [FrozenProcess] = []
         let ran = await manager.runExclusive("agent pause") { [freezer] in
             guard manager.isActive else { return }
@@ -176,7 +228,7 @@ final class AgentPauser {
             do {
                 try manager.journal { $0.frozenProcesses.append(contentsOf: candidates.map { FrozenProcess(pid: $0.pid, identity: nil) }) }
             } catch {
-                manager.fail("priority pause: could not journal the pause of \(agent.label): \(error.localizedDescription); it was left running")
+                manager.fail("\(what): could not journal the pause of \(agent.label): \(error.localizedDescription); it was left running")
                 return
             }
             let report = freezer.suspend(candidates, expectedParents: agent.parents)
@@ -192,19 +244,19 @@ final class AgentPauser {
                 let undo = freezer.cancelStops(confirmed)
                 let stuck = Set(undo.failed + undo.unverifiable + undo.unobserved)
                 manager.clearUndoneFreeze(.init(pids: pids.subtracting(stuck), docker: false))
-                manager.fail("priority pause: could not confirm the pause of \(agent.label) in the journal: \(error.localizedDescription); resumed \(undo.resumed.count) of the \(confirmed.count) pid(s) it had just stopped")
+                manager.fail("\(what): could not confirm the pause of \(agent.label) in the journal: \(error.localizedDescription); resumed \(undo.resumed.count) of the \(confirmed.count) pid(s) it had just stopped")
                 return
             }
             stopped = confirmed
-            Log.info("priority pause: stopped \(agent.label) (\(confirmed.count) pid(s), \(report.skipped.count) skipped)")
+            Log.info("\(what): stopped \(agent.label) (\(confirmed.count) pid(s), \(report.skipped.count) skipped)")
         }
-        guard ran, !stopped.isEmpty else { return false }
-        paused.append(Paused(id: agent.id, name: agent.label, processes: stopped))
-        return true
+        return ran ? stopped : []
     }
 
-    private func resumeAll(_ manager: SessionManager, because why: String) async {
-        let entries = paused
+    /// The one journaled resume, of what the journal still holds of
+    /// `entries`. The number of processes that could not be resumed and
+    /// stay journaled; nil when the transaction was refused.
+    private func resume(_ entries: [Paused], manager: SessionManager, what: String) async -> Int? {
         var failed = 0
         let ran = await manager.runExclusive("agent resume") { [freezer] in
             // Only what the journal still holds: anything else was resumed
@@ -221,13 +273,18 @@ final class AgentPauser {
             } catch {
                 // Resumed but still journaled: the next undo finds them
                 // running and clears them as gone.
-                Log.error("priority pause: could not clear \(done.count) resumed pid(s) from the journal: \(error.localizedDescription); the next undo clears them")
+                Log.error("\(what): could not clear \(done.count) resumed pid(s) from the journal: \(error.localizedDescription); the next undo clears them")
             }
-            Log.info("priority pause: resumed \(report.resumed.count) pid(s); \(report.gone.count) gone, \(keep.count) kept in the journal")
+            Log.info("\(what): resumed \(report.resumed.count) pid(s); \(report.gone.count) gone, \(keep.count) kept in the journal")
         }
+        return ran ? failed : nil
+    }
+
+    private func resumeAll(_ manager: SessionManager, because why: String) async {
+        let entries = paused
         // A refused transaction (lock busy, a power command running)
         // leaves the list as it is; the next evaluation tries again.
-        guard ran else { return }
+        guard let failed = await resume(entries, manager: manager, what: "priority pause") else { return }
         let names = entries.map(\.name)
         paused = []
         lastStep = nil
