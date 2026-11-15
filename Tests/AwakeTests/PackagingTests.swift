@@ -431,15 +431,21 @@ final class PackagingTests: XCTestCase {
         XCTAssertEqual(URL(fileURLWithPath: printed).resolvingSymlinksInPath(), bundle.resolvingSymlinksInPath(), "the printed path is absolute")
     }
 
-    /// Releases are ad-hoc signed and not notarized, so the signature is
-    /// ad-hoc whatever the environment says: an AWAKE_SIGN_IDENTITY left
-    /// over from older instructions changes nothing, and nothing asks for
-    /// the hardened runtime or a timestamp. No --deep (no nested code).
+    /// The signature is ad-hoc whatever the environment says: an
+    /// AWAKE_SIGN_IDENTITY left over from older instructions changes
+    /// nothing, and nothing asks for the hardened runtime or a timestamp.
+    /// Only --sign-identity selects the Developer ID path, which the
+    /// Release workflow takes when the certificate secret exists: hardened
+    /// runtime, timestamp and scripts/entitlements.plist. No --deep.
     /// Checked with a recording codesign.
-    func testBuildAppAlwaysSignsAdHoc() throws {
+    func testBuildAppSignsAdHocUnlessTheFlagNamesAnIdentity() throws {
         let (script, calls) = try patchedBuildApp(recordingCodesign: true)
         let out = scratch.appendingPathComponent("out", isDirectory: true)
         let bundle = out.appendingPathComponent("Awake.app").path
+        let checkout = script.deletingLastPathComponent().deletingLastPathComponent()
+        func codesignCalls() throws -> [String] {
+            try String(contentsOf: calls, encoding: .utf8).components(separatedBy: "\n").filter { $0.hasPrefix("codesign") }
+        }
 
         for identity in [nil, "Developer ID Application: Example (ABCDE12345)"] as [String?] {
             try? FileManager.default.removeItem(at: calls)
@@ -449,13 +455,73 @@ final class PackagingTests: XCTestCase {
 
             let label = identity ?? "no identity"
             XCTAssertEqual(r.status, 0, "\(label): \(r.output)")
-            let recorded = try String(contentsOf: calls, encoding: .utf8).components(separatedBy: "\n").filter { $0.hasPrefix("codesign") }
-            XCTAssertEqual(recorded, [
+            XCTAssertEqual(try codesignCalls(), [
                 "codesign --force --sign - \(bundle)",
                 "codesign --verify --strict \(bundle)",
                 "codesign -dvv \(bundle)",
             ], label)
             XCTAssertTrue(r.output.contains("Signing ad-hoc"), "\(label): \(r.output)")
+        }
+
+        // With the flag but no entitlements file in the checkout: stops
+        // before anything is built.
+        try? FileManager.default.removeItem(at: calls)
+        let identity = "0123456789ABCDEF0123456789ABCDEF01234567"
+        var r = try run("/bin/bash", [script.path, "--output", out.path, "--sign-identity", identity], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("scripts/entitlements.plist, which is missing"), r.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: calls.path), "nothing was built or signed")
+
+        let entitlements = checkout.appendingPathComponent("scripts/entitlements.plist")
+        try FileManager.default.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/entitlements.plist"), to: entitlements)
+        r = try run("/bin/bash", [script.path, "--output", out.path, "--sign-identity", identity], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try codesignCalls(), [
+            "codesign --force --sign \(identity) --options runtime --timestamp --entitlements \(entitlements.path) \(bundle)",
+            "codesign --verify --strict \(bundle)",
+            "codesign -dvv \(bundle)",
+        ])
+        XCTAssertFalse(r.output.contains("Signing ad-hoc"), r.output)
+
+        r = try run("/bin/bash", [script.path, "--output", out.path, "--sign-identity", ""], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+        XCTAssertEqual(r.status, 2, "an empty identity is a usage error, not an ad-hoc build: \(r.output)")
+    }
+
+    /// --version goes into the bundle's Info.plist, both keys, before the
+    /// bundle is signed; the checkout's Resources/Info.plist is not edited.
+    /// Without the flag the bundle keeps the checkout's version.
+    func testBuildAppWritesTheVersionIntoTheBundleAndLeavesTheCheckoutAlone() throws {
+        let (script, _) = try patchedBuildApp(recordingCodesign: false)
+        let out = scratch.appendingPathComponent("out", isDirectory: true)
+        let checkout = script.deletingLastPathComponent().deletingLastPathComponent()
+        let source = checkout.appendingPathComponent("Resources/Info.plist")
+        let before = try Data(contentsOf: source)
+        func versions(_ plist: URL) throws -> [String?] {
+            let info = try XCTUnwrap(try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any])
+            return [info["CFBundleShortVersionString"] as? String, info["CFBundleVersion"] as? String]
+        }
+        let bundlePlist = out.appendingPathComponent("Awake.app/Contents/Info.plist")
+
+        var r = try run("/bin/bash", [script.path, "--output", out.path], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try versions(bundlePlist), try versions(source))
+
+        for version in ["1.2.3", "0.0.0-ci"] {
+            r = try run("/bin/bash", [script.path, "--output", out.path, "--version", version], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+            XCTAssertEqual(r.status, 0, r.output)
+            XCTAssertEqual(try versions(bundlePlist), [version, version])
+            XCTAssertEqual(try run("/usr/bin/codesign", ["--verify", "--strict", out.appendingPathComponent("Awake.app").path]).status, 0, "signed after the version was written")
+        }
+        XCTAssertEqual(try Data(contentsOf: source), before, "Resources/Info.plist in the checkout is unchanged")
+    }
+
+    func testBuildAppRefusesAVersionThatIsNotThreeNumbers() throws {
+        let (script, calls) = try patchedBuildApp(recordingCodesign: true)
+        for version in ["", "1.2", "v1.2.3", "1.2.3 4", "1.2.3;x", "1.2.3-a/b"] {
+            let r = try run("/bin/bash", [script.path, "--output", scratch.appendingPathComponent("out").path, "--version", version], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+            XCTAssertEqual(r.status, 2, "\(version): \(r.output)")
+            XCTAssertTrue(r.output.contains("usage:"), r.output)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: calls.path), "\(version): nothing was built or signed")
         }
     }
 

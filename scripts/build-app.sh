@@ -1,16 +1,28 @@
 #!/bin/bash
-# Build Awake and assemble an ad-hoc signed Awake.app. install.sh runs this for
+# Build Awake and assemble a signed Awake.app. install.sh runs this for
 # source installs, and .github/workflows/release.yml runs it for the
 # downloadable package, so both produce the same bundle.
 #
-# Usage: scripts/build-app.sh --output DIR
+# Usage: scripts/build-app.sh --output DIR [--version X.Y.Z[-suffix]]
+#                             [--sign-identity IDENTITY]
 #   Writes DIR/Awake.app, replacing a bundle already at that path. DIR is
 #   created if needed. Prints the bundle path last.
 #
-# The signature is always ad-hoc (`codesign --sign -`): releases are ad-hoc
-# signed and not notarized (docs/releasing.md). It identifies only this build
-# (its cdhash), and macOS blocks the first launch of a downloaded copy until
-# the user allows it. The bundle has no nested code, so there is no --deep;
+#   --version        written into the bundle's Info.plist as
+#                    CFBundleShortVersionString and CFBundleVersion. The
+#                    Release workflow passes the tag's digits; without the
+#                    flag the bundle keeps what Resources/Info.plist says.
+#   --sign-identity  a Developer ID Application identity in the keychain
+#                    search list (its name or SHA-1 hash). The bundle is then
+#                    signed with the hardened runtime, a secure timestamp and
+#                    scripts/entitlements.plist, which is what notarization
+#                    needs. Only the flag selects this; nothing is read from
+#                    the environment.
+#
+# Without --sign-identity the signature is ad-hoc (`codesign --sign -`). It
+# identifies only this build (its cdhash), and macOS blocks the first launch
+# of a downloaded copy until the user allows it. There is no --deep: nested
+# code, when the build has any, is signed on its own before the bundle, and
 # backstop.sh under Contents/Resources is sealed as a resource.
 set -euo pipefail
 
@@ -19,6 +31,7 @@ set -euo pipefail
 SWIFT=/usr/bin/swift
 CODESIGN=/usr/bin/codesign
 PLUTIL=/usr/bin/plutil
+PLISTBUDDY=/usr/libexec/PlistBuddy
 RM=/bin/rm
 MKDIR=/bin/mkdir
 CP=/bin/cp
@@ -26,16 +39,33 @@ CHMOD=/bin/chmod
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
-usage() { echo "usage: $0 --output DIR" >&2; }
+usage() { echo "usage: $0 --output DIR [--version X.Y.Z[-suffix]] [--sign-identity IDENTITY]" >&2; }
 OUTPUT=""
+VERSION=""
+SIGN_IDENTITY=""
 while (( $# )); do
   case "$1" in
     --output) [[ $# -ge 2 ]] || { usage; exit 2; }; OUTPUT="$2"; shift 2 ;;
+    --version) [[ $# -ge 2 && -n "$2" ]] || { usage; exit 2; }; VERSION="$2"; shift 2 ;;
+    --sign-identity) [[ $# -ge 2 && -n "$2" ]] || { usage; exit 2; }; SIGN_IDENTITY="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) echo "unknown argument: $1" >&2; usage; exit 2 ;;
   esac
 done
 [[ -n "$OUTPUT" ]] || { usage; exit 2; }
+# Checked before anything is built: three numbers, and optionally a suffix of
+# letters, digits, dots and hyphens (0.0.0-ci). It goes into a plist and into
+# file names, so nothing else is accepted.
+if [[ -n "$VERSION" && ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  echo "--version '$VERSION' is not X.Y.Z or X.Y.Z-suffix" >&2
+  usage
+  exit 2
+fi
+ENTITLEMENTS="$ROOT/scripts/entitlements.plist"
+if [[ -n "$SIGN_IDENTITY" && ! -f "$ENTITLEMENTS" ]]; then
+  echo "--sign-identity needs $ENTITLEMENTS, which is missing" >&2
+  exit 1
+fi
 # Resolved now, before the build changes into the checkout: a relative
 # --output means relative to the caller's directory, not to the checkout.
 "$MKDIR" -p "$OUTPUT"
@@ -127,11 +157,20 @@ step "Assembling $APP"
 # bundle and only then runs this copy; an edited script fails that check.
 "$CP" "$ROOT/scripts/backstop.sh" "$APP/Contents/Resources/backstop.sh"
 "$CHMOD" 755 "$APP/Contents/Resources/backstop.sh"
+if [[ -n "$VERSION" ]]; then
+  "$PLISTBUDDY" -c "Set :CFBundleShortVersionString $VERSION" -c "Set :CFBundleVersion $VERSION" "$APP/Contents/Info.plist"
+  echo "version $VERSION"
+fi
 "$PLUTIL" -lint "$APP/Contents/Info.plist" >/dev/null
 
 # 3. Sign --------------------------------------------------------------------
-step "Signing ad-hoc (this build is identified only by its cdhash)"
-"$CODESIGN" --force --sign - "$APP"
+if [[ -n "$SIGN_IDENTITY" ]]; then
+  step "Signing with $SIGN_IDENTITY (hardened runtime, timestamp, entitlements)"
+  "$CODESIGN" --force --sign "$SIGN_IDENTITY" --options runtime --timestamp --entitlements "$ENTITLEMENTS" "$APP"
+else
+  step "Signing ad-hoc (this build is identified only by its cdhash)"
+  "$CODESIGN" --force --sign - "$APP"
+fi
 "$CODESIGN" --verify --strict "$APP"
 "$CODESIGN" -dvv "$APP" 2>&1 | grep -E '^(Identifier|Signature|Authority|TeamIdentifier|CDHash)=' || true
 echo "$APP"

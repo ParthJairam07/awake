@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Entitlements for the Developer ID build (scripts/build-app.sh
+  with a signing identity). Awake is not sandboxed: it runs `sudo pmset`, signals
+  other apps and installs a LaunchAgent, none of which the sandbox allows.
+  Under the hardened runtime only what is listed here is granted.
+
+  com.apple.security.personal-information.location
+      macOS gives Wi-Fi network names only to an app with Location Services
+      access; the hotspot handoff needs them. A hardened app without this
+      key is never offered the permission prompt.
+
+  Nothing else is needed: the private frameworks Awake loads are Apple's own
+  (library validation allows them), Sparkle.framework is signed with the same
+  team, and Accessibility and Screen Recording are user permissions, not
+  entitlements.
+-->
+<plist version="1.0">
+<dict>
+	<key>com.apple.security.personal-information.location</key>
+	<true/>
+</dict>
+</plist>
