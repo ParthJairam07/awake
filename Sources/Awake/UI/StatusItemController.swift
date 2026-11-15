@@ -61,6 +61,13 @@ final class StatusItemController: NSObject {
     /// The width the hosting view is laid out at (the widest content it has held).
     var hostWidth: CGFloat { hostingView?.frame.width ?? 0 }
 
+    /// Step E: what "Check for Updates…" does. Set by the app delegate;
+    /// nil (tests) leaves the item out of the menu.
+    var checkForUpdates: (@MainActor () -> Void)?
+    /// Step E: reopens the Setup window. Set by the app delegate; nil leaves
+    /// the menu without the item.
+    var showSetup: (@MainActor () -> Void)?
+
     /// Autosave name so macOS remembers where the user drags the item.
     static let autosaveName = "awake.status"
 
@@ -650,12 +657,14 @@ final class StatusItemController: NSObject {
         // next opening drop the line if sleep is enabled again.
         Task { await manager.recheckForeignSleep() }
         let menu = StatusMenu.menu(
-            Self.menuItems(manager: manager, status: status),
+            StatusMenu.withAppItems(Self.menuItems(manager: manager, status: status), checkForUpdates: checkForUpdates != nil, setup: showSetup != nil),
             target: self,
             settings: #selector(menuOpenSettings),
             quit: #selector(menuQuit),
             relaunchBrowser: #selector(menuRelaunchBrowser(_:)),
-            stopWaitingForOutput: #selector(menuStopWaitingForOutput(_:))
+            stopWaitingForOutput: #selector(menuStopWaitingForOutput(_:)),
+            checkForUpdates: #selector(menuCheckForUpdates),
+            setup: #selector(menuSetup)
         )
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
@@ -735,6 +744,14 @@ final class StatusItemController: NSObject {
 
     @objc private func menuQuit() {
         NSApplication.shared.terminate(nil)
+    }
+
+    @objc private func menuSetup() {
+        showSetup?()
+    }
+
+    @objc private func menuCheckForUpdates() {
+        checkForUpdates?()
     }
 
     @objc private func menuOpenSettings() {

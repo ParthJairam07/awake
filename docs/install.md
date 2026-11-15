@@ -35,16 +35,48 @@ limits. In particular, the installer's version check, the recovery script
 sealed inside the app and the code requirement the recovery agent pins,
 described below, are not in `v0.1.0`.
 
+## The quick ways
+
+For the latest stable release, any of these does the whole install:
+
+```bash
+brew tap ParthJairam07/awake && brew install --cask awake
+```
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ParthJairam07/awake/main/scripts/install.sh | bash
+```
+
+or download `Awake-<version>.dmg` from the release, open it and drag Awake
+to Applications.
+
+The curl installer finds the release GitHub marks Latest, downloads its zip,
+`install.sh` and `SHA256SUMS` over HTTPS into a private temporary folder,
+checks both files against `SHA256SUMS`, and asks "Install Awake <version>
+now?" on the terminal before anything on the Mac changes. It then runs that
+release's own `install.sh`, which is the installer described in the rest of
+this page. For an unsigned build it asks separately whether to remove the
+download's quarantine flag so the first launch is not blocked; answering no
+leaves the flag in place. It never does that for a Developer ID build. The
+checksum shows the download was not damaged or swapped after the release
+was published; it does not show who built it. `gh attestation verify`
+(below) does.
+
+Homebrew and the disk image put the app in place and nothing else. The
+app's Setup window, shown on first launch, installs the sudoers rule (it
+opens Terminal with the `install.sh --sudoers-only` sealed in the app, and
+Terminal asks for the password), and the app loads its own recovery agent.
+
 ## Install a release yourself
 
 You need `gh`, the [GitHub CLI](https://cli.github.com).
 
-1. Download the zip and `SHA256SUMS` of the release you chose into an empty
-   folder, from the releases page or with `gh`. For the stable release, the
-   one marked Latest:
+1. Download the zip, `install.sh` and `SHA256SUMS` of the release you chose
+   into an empty folder, from the releases page or with `gh`. For the stable
+   release, the one marked Latest:
 
    ```bash
-   gh release download --repo ParthJairam07/awake --pattern '*.zip' --pattern SHA256SUMS
+   gh release download --repo ParthJairam07/awake --pattern '*.zip' --pattern install.sh --pattern SHA256SUMS
    ```
 
    For the newest nightly, paste this whole block. It reads every page of
@@ -72,7 +104,7 @@ You need `gh`, the [GitHub CLI](https://cli.github.com).
        printf 'Unexpected nightly tag: %s. Nothing was downloaded.\n' "$tag" >&2
        return 1
      fi
-     gh release download "$tag" --repo ParthJairam07/awake --pattern '*.zip' --pattern SHA256SUMS
+     gh release download "$tag" --repo ParthJairam07/awake --pattern '*.zip' --pattern install.sh --pattern SHA256SUMS
    }
    awake_nightly
    ```
@@ -85,32 +117,33 @@ You need `gh`, the [GitHub CLI](https://cli.github.com).
    filled in. A nightly's tag ends with the first 12 characters of it.
 
    ```bash
-   shasum -a 256 -c SHA256SUMS
+   shasum -a 256 -c SHA256SUMS --ignore-missing
    gh attestation verify <zip> -R ParthJairam07/awake \
      --signer-workflow ParthJairam07/awake/.github/workflows/release.yml \
      --source-ref <ref> --source-digest <commit>
    ```
 
-   The first command checks the zip against the `SHA256SUMS` downloaded with
-   it. The second checks that this repository's Release workflow built this
+   The first command checks the zip and `install.sh` against the
+   `SHA256SUMS` downloaded with them. The second checks that this repository's Release workflow built this
    exact zip from that commit for that ref, so a nightly cannot pass for a
    stable release. Every nightly is built for `refs/heads/main`, so only
    `--source-digest` keeps another nightly's zip from passing: do not leave
    it out, and do not shorten the commit to the 12 characters in the tag.
 
-3. Unzip and run the installer that comes in the zip:
+3. Unzip and run the installer downloaded with the zip:
 
    ```bash
    ditto -x -k <zip> .
-   cd <the zip's name without .zip>
-   ./install.sh --allow-unverified-origin --app ./Awake.app
+   bash install.sh --allow-unverified-origin --app ./Awake.app
    open "$HOME/Applications/Awake.app"
    ```
 
-   Releases are ad-hoc signed and not notarized. The installer can check that
-   the bundle is intact but not who made it, so it refuses to install without
-   `--allow-unverified-origin`, which says you ran the two commands in step 2.
-   macOS blocks the first launch of a downloaded copy until you allow it in
+   The installer can check that the bundle is intact but not who made it, so
+   it refuses to install without `--allow-unverified-origin`, which says you
+   ran the two commands in step 2. A release's notes open with how it is
+   signed. A build signed with Developer ID and notarized by Apple opens like
+   any downloaded app. An **unsigned build** (ad-hoc signed, not notarized)
+   is blocked on first launch: right-click → Open, or allow it once in
    System Settings > Privacy & Security.
 
 The installer checks the bundle's signature, identifier and version before it
@@ -263,8 +296,10 @@ From your checkout:
 ./scripts/uninstall.sh --purge
 ```
 
-From the unpacked release zip, run `./uninstall.sh` (or `./uninstall.sh
---purge`) in its folder (`Awake-<version>-macos`, or the nightly name). A
+With Homebrew, `brew uninstall --cask awake` removes the app and unloads the
+recovery agent, and `--zap` also removes the sudoers rule, settings and
+logs. With a release's `uninstall.sh`, downloaded from its release page, run
+`bash uninstall.sh` (or `bash uninstall.sh --purge`). A
 checkout's uninstaller (in `scripts`, with `Package.swift` one level up) runs
 the `backstop.sh` beside it. Anywhere else, such as the zip's folder, the
 uninstaller runs only the copy sealed in the installed app, after `codesign

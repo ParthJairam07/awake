@@ -243,6 +243,54 @@ jobs:
           cd "$dump" || exit 1
           cut -f1 index.tsv | tr '\n' '\0' | xargs -0 "$tools/shellcheck"
 
+  release-dry-run:
+    name: Release dry run (ad-hoc package)
+    # Builds and packages the app the way release.yml does without secrets,
+    # so a change that breaks packaging fails here and not on a tag. Pull
+    # requests only: a push to main already ran this on its pull request.
+    if: github.event_name == 'pull_request'
+    runs-on: macos-26
+    timeout-minutes: 30
+    env:
+      VERSION: 0.0.0-ci
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Build the app, ad-hoc signed
+        run: scripts/build-app.sh --version "$VERSION" --output dist
+
+      - name: Check the bundle
+        # The version reached Info.plist, the signature is intact (Sparkle's
+        # nested code included) and it is ad-hoc: no certificate is used here.
+        run: |
+          plist=dist/Awake.app/Contents/Info.plist
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$plist")" == "$VERSION" ]]
+          [[ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$plist")" == "$VERSION" ]]
+          codesign --verify --deep --strict --verbose=2 dist/Awake.app
+          codesign -dv dist/Awake.app 2>&1 | tee signature.txt
+          grep -qx 'Signature=adhoc' signature.txt
+
+      - name: Package
+        run: |
+          .github/scripts/package-release.sh --app dist/Awake.app --name "Awake-$VERSION" --output release
+          cd release
+          shasum -a 256 "Awake-$VERSION.zip" "Awake-$VERSION.dmg" install.sh uninstall.sh | tee SHA256SUMS
+          # The zip unpacks to the bundle at its top level, still intact.
+          ditto -x -k "Awake-$VERSION.zip" unpacked
+          codesign --verify --deep --strict unpacked/Awake.app
+          rm -rf unpacked
+
+      - name: Upload the zip
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: Awake-0.0.0-ci
+          path: release/Awake-0.0.0-ci.zip
+          if-no-files-found: error
+          retention-days: 7
+
   shellcheck:
     name: ShellCheck scripts
     # ShellCheck is pinned, as in the macOS jobs, since each version finds

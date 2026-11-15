@@ -322,6 +322,7 @@ final class PackagingTests: XCTestCase {
             try fm.copyItem(at: Self.repoRoot.appendingPathComponent("Resources/\(name)"), to: checkout.appendingPathComponent("Resources/\(name)"))
         }
         try fm.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/backstop.sh"), to: checkout.appendingPathComponent("scripts/backstop.sh"))
+        try fm.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/install.sh"), to: checkout.appendingPathComponent("scripts/install.sh"))
         try fm.copyItem(atPath: "/usr/bin/true", toPath: binroot.appendingPathComponent("Awake").path)
         // The `awake` command, which the same build produces as awake-cli.
         try fm.copyItem(atPath: "/usr/bin/true", toPath: binroot.appendingPathComponent("awake-cli").path)
@@ -439,16 +440,39 @@ final class PackagingTests: XCTestCase {
         XCTAssertEqual(URL(fileURLWithPath: printed).resolvingSymlinksInPath(), bundle.resolvingSymlinksInPath(), "the printed path is absolute")
     }
 
-    /// Releases are ad-hoc signed and not notarized, so the signature is
-    /// ad-hoc whatever the environment says: an AWAKE_SIGN_IDENTITY left
-    /// over from older instructions changes nothing, and nothing asks for
-    /// the hardened runtime or a timestamp. No --deep: the `awake` command,
-    /// the one piece of nested code, is signed by itself before the bundle.
+    /// Without --output the bundle lands in the caller's directory, so
+    /// `./scripts/build-app.sh` from a checkout leaves ./Awake.app (which
+    /// .gitignore covers) and ci.yml's dry run needs no folder of its own.
+    func testBuildAppWithoutOutputWritesIntoTheCallersDirectory() throws {
+        let (script, _) = try patchedBuildApp(recordingCodesign: true)
+        let caller = scratch.appendingPathComponent("here", isDirectory: true)
+        try FileManager.default.createDirectory(at: caller, withIntermediateDirectories: true)
+
+        let r = try run("/bin/bash", [script.path, "--version", "0.0.0-ci"], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path], currentDirectory: caller)
+
+        XCTAssertEqual(r.status, 0, r.output)
+        let bundle = caller.appendingPathComponent("Awake.app")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: bundle.appendingPathComponent("Contents/Info.plist").path), r.output)
+        let printed = try XCTUnwrap(r.output.components(separatedBy: "\n").filter { !$0.isEmpty }.last)
+        XCTAssertEqual(URL(fileURLWithPath: printed).resolvingSymlinksInPath(), bundle.resolvingSymlinksInPath())
+    }
+
+    /// The signature is ad-hoc whatever the environment says: an
+    /// AWAKE_SIGN_IDENTITY left over from older instructions changes
+    /// nothing, and nothing asks for the hardened runtime or a timestamp.
+    /// Only --sign-identity selects the Developer ID path, which the
+    /// Release workflow takes when the certificate secret exists: hardened
+    /// runtime, timestamp and scripts/entitlements.plist. No --deep: the `awake`
+    /// command, the one piece of nested code here, is signed by itself first.
     /// Checked with a recording codesign.
-    func testBuildAppAlwaysSignsAdHoc() throws {
+    func testBuildAppSignsAdHocUnlessTheFlagNamesAnIdentity() throws {
         let (script, calls) = try patchedBuildApp(recordingCodesign: true)
         let out = scratch.appendingPathComponent("out", isDirectory: true)
         let bundle = out.appendingPathComponent("Awake.app").path
+        let checkout = script.deletingLastPathComponent().deletingLastPathComponent()
+        func codesignCalls() throws -> [String] {
+            try String(contentsOf: calls, encoding: .utf8).components(separatedBy: "\n").filter { $0.hasPrefix("codesign") }
+        }
 
         for identity in [nil, "Developer ID Application: Example (ABCDE12345)"] as [String?] {
             try? FileManager.default.removeItem(at: calls)
@@ -458,14 +482,204 @@ final class PackagingTests: XCTestCase {
 
             let label = identity ?? "no identity"
             XCTAssertEqual(r.status, 0, "\(label): \(r.output)")
-            let recorded = try String(contentsOf: calls, encoding: .utf8).components(separatedBy: "\n").filter { $0.hasPrefix("codesign") }
-            XCTAssertEqual(recorded, [
+            XCTAssertEqual(try codesignCalls(), [
                 "codesign --force --sign - \(bundle)/Contents/Helpers/awake",
                 "codesign --force --sign - \(bundle)",
                 "codesign --verify --strict \(bundle)",
                 "codesign -dvv \(bundle)",
             ], label)
             XCTAssertTrue(r.output.contains("Signing ad-hoc"), "\(label): \(r.output)")
+        }
+
+        // With the flag but no entitlements file in the checkout: stops
+        // before anything is built.
+        try? FileManager.default.removeItem(at: calls)
+        let identity = "0123456789ABCDEF0123456789ABCDEF01234567"
+        var r = try run("/bin/bash", [script.path, "--output", out.path, "--sign-identity", identity], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("scripts/entitlements.plist, which is missing"), r.output)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: calls.path), "nothing was built or signed")
+
+        let entitlements = checkout.appendingPathComponent("scripts/entitlements.plist")
+        try FileManager.default.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/entitlements.plist"), to: entitlements)
+        r = try run("/bin/bash", [script.path, "--output", out.path, "--sign-identity", identity], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try codesignCalls(), [
+            "codesign --force --sign \(identity) --options runtime --timestamp \(bundle)/Contents/Helpers/awake",
+            "codesign --force --sign \(identity) --options runtime --timestamp --entitlements \(entitlements.path) \(bundle)",
+            "codesign --verify --strict \(bundle)",
+            "codesign -dvv \(bundle)",
+        ])
+        XCTAssertFalse(r.output.contains("Signing ad-hoc"), r.output)
+
+        r = try run("/bin/bash", [script.path, "--output", out.path, "--sign-identity", ""], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+        XCTAssertEqual(r.status, 2, "an empty identity is a usage error, not an ad-hoc build: \(r.output)")
+    }
+
+    /// --version goes into the bundle's Info.plist, both keys, before the
+    /// bundle is signed; the checkout's Resources/Info.plist is not edited.
+    /// Without the flag the bundle keeps the checkout's version.
+    func testBuildAppWritesTheVersionIntoTheBundleAndLeavesTheCheckoutAlone() throws {
+        let (script, _) = try patchedBuildApp(recordingCodesign: false)
+        let out = scratch.appendingPathComponent("out", isDirectory: true)
+        let checkout = script.deletingLastPathComponent().deletingLastPathComponent()
+        let source = checkout.appendingPathComponent("Resources/Info.plist")
+        let before = try Data(contentsOf: source)
+        func versions(_ plist: URL) throws -> [String?] {
+            let info = try XCTUnwrap(try PropertyListSerialization.propertyList(from: Data(contentsOf: plist), format: nil) as? [String: Any])
+            return [info["CFBundleShortVersionString"] as? String, info["CFBundleVersion"] as? String]
+        }
+        let bundlePlist = out.appendingPathComponent("Awake.app/Contents/Info.plist")
+
+        var r = try run("/bin/bash", [script.path, "--output", out.path], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try versions(bundlePlist), try versions(source))
+
+        for version in ["1.2.3", "0.0.0-ci"] {
+            r = try run("/bin/bash", [script.path, "--output", out.path, "--version", version], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+            XCTAssertEqual(r.status, 0, r.output)
+            XCTAssertEqual(try versions(bundlePlist), [version, version])
+            XCTAssertEqual(try run("/usr/bin/codesign", ["--verify", "--strict", out.appendingPathComponent("Awake.app").path]).status, 0, "signed after the version was written")
+        }
+        XCTAssertEqual(try Data(contentsOf: source), before, "Resources/Info.plist in the checkout is unchanged")
+    }
+
+    func testBuildAppRefusesAVersionThatIsNotThreeNumbers() throws {
+        let (script, calls) = try patchedBuildApp(recordingCodesign: true)
+        for version in ["", "1.2", "v1.2.3", "1.2.3 4", "1.2.3;x", "1.2.3-a/b"] {
+            let r = try run("/bin/bash", [script.path, "--output", scratch.appendingPathComponent("out").path, "--version", version], environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
+            XCTAssertEqual(r.status, 2, "\(version): \(r.output)")
+            XCTAssertTrue(r.output.contains("usage:"), r.output)
+            XCTAssertFalse(FileManager.default.fileExists(atPath: calls.path), "\(version): nothing was built or signed")
+        }
+    }
+
+    /// A binary that links Sparkle gets the framework copied into
+    /// Contents/Frameworks, symlinks kept, and every piece of nested code
+    /// signed on its own before the bundle, inside out, in the order
+    /// Sparkle documents; Downloader.xpc keeps its entitlements. A binary
+    /// that links it with no framework beside it stops the build. Checked
+    /// with a fake otool and a recording codesign.
+    func testBuildAppEmbedsSparkleAndSignsItsNestedCodeBeforeTheBundle() throws {
+        let fm = FileManager.default
+        let (script, calls) = try patchedBuildApp(recordingCodesign: true)
+        let otool = scratch.appendingPathComponent("bin/otool")
+        try TestScripts.write("#!/bin/bash\nprintf '\\t@rpath/Sparkle.framework/Versions/B/Sparkle (compatibility version 1.6.0)\\n'\n", to: otool)
+        var text = try String(contentsOf: script, encoding: .utf8).components(separatedBy: "\n")
+        let hits = text.indices.filter { text[$0].hasPrefix("OTOOL=") }
+        XCTAssertEqual(hits.count, 1)
+        text[hits[0]] = "OTOOL='\(otool.path)'"
+        try text.joined(separator: "\n").write(to: script, atomically: true, encoding: .utf8)
+        let out = scratch.appendingPathComponent("out", isDirectory: true)
+        let environment = ["PATH": "/usr/bin:/bin", "HOME": scratch.path]
+
+        var r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+        XCTAssertEqual(r.status, 1, r.output)
+        XCTAssertTrue(r.output.contains("links Sparkle.framework, but it is not beside the binary"), r.output)
+        XCTAssertFalse((try String(contentsOf: calls, encoding: .utf8)).contains("codesign"), "nothing was signed")
+
+        let framework = scratch.appendingPathComponent("binroot/Sparkle.framework", isDirectory: true)
+        for dir in ["Versions/B/XPCServices/Installer.xpc", "Versions/B/XPCServices/Downloader.xpc", "Versions/B/Updater.app"] {
+            try fm.createDirectory(at: framework.appendingPathComponent(dir), withIntermediateDirectories: true)
+        }
+        for file in ["Versions/B/Autoupdate", "Versions/B/Sparkle"] {
+            try Data("x".utf8).write(to: framework.appendingPathComponent(file))
+        }
+        try fm.createSymbolicLink(atPath: framework.appendingPathComponent("Versions/Current").path, withDestinationPath: "B")
+        try fm.createSymbolicLink(atPath: framework.appendingPathComponent("Sparkle").path, withDestinationPath: "Versions/Current/Sparkle")
+
+        let bundle = out.appendingPathComponent("Awake.app").path
+        let embedded = "\(bundle)/Contents/Frameworks/Sparkle.framework"
+        let pieces = ["Versions/B/XPCServices/Installer.xpc", "--preserve-metadata=entitlements \(embedded)/Versions/B/XPCServices/Downloader.xpc",
+                      "Versions/B/Autoupdate", "Versions/B/Updater.app", ""]
+        func nested(_ prefix: String) -> [String] {
+            pieces.map { piece in
+                if piece.hasPrefix("--") { return "\(prefix) \(piece)" }
+                return piece.isEmpty ? "\(prefix) \(embedded)" : "\(prefix) \(embedded)/\(piece)"
+            }
+        }
+        func codesignCalls() throws -> [String] {
+            try String(contentsOf: calls, encoding: .utf8).components(separatedBy: "\n").filter { $0.hasPrefix("codesign") }
+        }
+
+        try? fm.removeItem(at: calls)
+        r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try codesignCalls(), nested("codesign --force --sign -") + [
+            "codesign --force --sign - \(bundle)/Contents/Helpers/awake",
+            "codesign --force --sign - \(bundle)",
+            "codesign --verify --strict \(bundle)",
+            "codesign --verify --strict --deep \(bundle)",
+            "codesign -dvv \(bundle)",
+        ])
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: "\(embedded)/Versions/Current"), "B", "the framework's symlinks are kept")
+        XCTAssertEqual(try fm.destinationOfSymbolicLink(atPath: "\(embedded)/Sparkle"), "Versions/Current/Sparkle")
+
+        try? fm.removeItem(at: calls)
+        let identity = "0123456789ABCDEF0123456789ABCDEF01234567"
+        let checkout = script.deletingLastPathComponent().deletingLastPathComponent()
+        let entitlements = checkout.appendingPathComponent("scripts/entitlements.plist")
+        try fm.copyItem(at: Self.repoRoot.appendingPathComponent("scripts/entitlements.plist"), to: entitlements)
+        r = try run("/bin/bash", [script.path, "--output", out.path, "--sign-identity", identity], environment: environment)
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try codesignCalls(), nested("codesign --force --sign \(identity) --options runtime --timestamp") + [
+            "codesign --force --sign \(identity) --options runtime --timestamp \(bundle)/Contents/Helpers/awake",
+            "codesign --force --sign \(identity) --options runtime --timestamp --entitlements \(entitlements.path) \(bundle)",
+            "codesign --verify --strict \(bundle)",
+            "codesign --verify --strict --deep \(bundle)",
+            "codesign -dvv \(bundle)",
+        ], "nested code gets the runtime and a timestamp but not the app's entitlements")
+    }
+
+    /// The update key goes from scripts/sparkle-public-key.txt into the
+    /// bundle's Info.plist as SUPublicEDKey. An empty or missing file means
+    /// no key (the app then never starts Sparkle), and anything that is not
+    /// an EdDSA public key stops the build instead of shipping a bundle
+    /// that would refuse every update.
+    func testBuildAppWritesTheUpdateKeyOnlyWhenTheKeyFileHoldsOne() throws {
+        let (script, _) = try patchedBuildApp(recordingCodesign: true)
+        let out = scratch.appendingPathComponent("out", isDirectory: true)
+        let checkout = script.deletingLastPathComponent().deletingLastPathComponent()
+        let keyFile = checkout.appendingPathComponent("scripts/sparkle-public-key.txt")
+        let environment = ["PATH": "/usr/bin:/bin", "HOME": scratch.path]
+        func info() throws -> [String: Any] {
+            let data = try Data(contentsOf: out.appendingPathComponent("Awake.app/Contents/Info.plist"))
+            return try XCTUnwrap(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        }
+
+        for contents in [nil, "", "\n  \n"] as [String?] {
+            try? FileManager.default.removeItem(at: keyFile)
+            if let contents { try contents.write(to: keyFile, atomically: true, encoding: .utf8) }
+            let r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+            XCTAssertEqual(r.status, 0, r.output)
+            XCTAssertNil(try info()["SUPublicEDKey"], "no key for \(contents.map { "'\($0)'" } ?? "a missing file")")
+            XCTAssertTrue(r.output.contains("this build will not update itself"), r.output)
+            XCTAssertEqual(try info()["SUFeedURL"] as? String, "https://github.com/ParthJairam07/awake/releases/latest/download/appcast.xml")
+        }
+
+        let key = "oLs+QL40I8rnQvpZV8QTYgRII43U9qmdBrHWvQ5qUbY="
+        try (key + "\n").write(to: keyFile, atomically: true, encoding: .utf8)
+        var r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+        XCTAssertEqual(r.status, 0, r.output)
+        XCTAssertEqual(try info()["SUPublicEDKey"] as? String, key)
+
+        for bad in ["not a key", String(key.dropLast(2)), key + key, "<string>\(key)</string>"] {
+            try bad.write(to: keyFile, atomically: true, encoding: .utf8)
+            r = try run("/bin/bash", [script.path, "--output", out.path], environment: environment)
+            XCTAssertEqual(r.status, 1, "\(bad): \(r.output)")
+            XCTAssertTrue(r.output.contains("does not hold an EdDSA public key"), r.output)
+        }
+    }
+
+    /// The checked-in key file is empty until the owner generates a key, or
+    /// holds exactly one EdDSA public key. Anything else would stop every
+    /// build (see the test above).
+    func testTheCheckedInUpdateKeyFileIsEmptyOrOneKey() throws {
+        let text = try String(contentsOf: Self.repoRoot.appendingPathComponent("scripts/sparkle-public-key.txt"), encoding: .utf8)
+            .filter { !$0.isWhitespace }
+        if !text.isEmpty {
+            XCTAssertNotNil(text.range(of: #"^[A-Za-z0-9+/]{43}=$"#, options: .regularExpression), "scripts/sparkle-public-key.txt is not an EdDSA public key")
+            XCTAssertEqual(Data(base64Encoded: text)?.count, 32)
         }
     }
 
@@ -498,6 +712,8 @@ final class PackagingTests: XCTestCase {
             "cp \(checkout)/Resources/AppIcon.icns \(app)/Contents/Resources/AppIcon.icns",
             "cp \(checkout)/scripts/backstop.sh \(app)/Contents/Resources/backstop.sh",
             "chmod 755 \(app)/Contents/Resources/backstop.sh",
+            "cp \(checkout)/scripts/install.sh \(app)/Contents/Resources/install.sh",
+            "chmod 755 \(app)/Contents/Resources/install.sh",
         ] {
             XCTAssertTrue(recorded.contains(call), "\(call) not in \(recorded)")
         }
@@ -505,9 +721,11 @@ final class PackagingTests: XCTestCase {
         XCTAssertTrue(recorded.contains { $0.hasPrefix("cp ") && $0.hasSuffix("/awake-cli \(app)/Contents/Helpers/awake") }, "\(recorded)")
     }
 
-    func testBuildAppNeedsAnOutputDirectory() throws {
+    /// --output may be left out (the caller's directory, tested above), but
+    /// not given without a value or with an empty one.
+    func testBuildAppRefusesAnOutputFlagWithoutADirectory() throws {
         let (script, calls) = try patchedBuildApp(recordingCodesign: true)
-        for args in [[String](), ["--output"], ["--bogus", "x"]] {
+        for args in [["--output"], ["--output", ""], ["--bogus", "x"]] {
             let r = try run("/bin/bash", [script.path] + args, environment: ["PATH": "/usr/bin:/bin", "HOME": scratch.path])
             XCTAssertEqual(r.status, 2, "\(args): \(r.output)")
             XCTAssertTrue(r.output.contains("usage:"), r.output)

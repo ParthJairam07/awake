@@ -4,23 +4,41 @@ name: Release
 # channels. docs/releasing.md walks through both.
 #
 # Triggers
-#   push of a tag v<version>  stable: test, build, package, attest, publish a
-#                             GitHub Release marked Latest. <version> must
-#                             equal CFBundleShortVersionString in
-#                             Resources/Info.plist.
+#   push of a tag v<version>  stable: test, build, sign, package, attest,
+#                             publish a GitHub Release marked Latest. The
+#                             tag's digits become the bundle's version
+#                             (scripts/build-app.sh --version).
 #   schedule, daily           nightly: the same for the head of main, published
 #                             as a prerelease that is never Latest, under a new
 #                             tag nightly-<UTC date>-<first 12 hex digits of
 #                             the commit>. A commit that already has a nightly
 #                             is skipped before anything is built.
-#   workflow_dispatch         test, build and package only; the zip and
-#                             SHA256SUMS are uploaded as a workflow artifact.
-#                             Nothing is attested or published. With the
-#                             nightly input set, it is a nightly run instead,
-#                             and only on main.
+#   workflow_dispatch         test, build and package only; the zip, the
+#                             disk image and SHA256SUMS are uploaded as a
+#                             workflow artifact. Nothing is attested or
+#                             published. With the nightly input set, it is a
+#                             nightly run instead, and only on main.
 #
-# The bundle is ad-hoc signed and not notarized (build-app.sh), so the run
-# uses no secrets and no keychain. Every action is pinned to a commit.
+# Signing has two modes, chosen by which repository secrets exist. Nothing
+# fails when they are missing: the release is still published, and its notes
+# say which kind of build it is.
+#   APPLE_CERTIFICATE_P12 + APPLE_CERTIFICATE_PASSWORD
+#       present: the bundle and the disk image are signed with that Developer
+#       ID certificate and the hardened runtime, from a keychain that exists
+#       only for the job. absent: ad-hoc signed, as a source build is.
+#   APPLE_ID + APPLE_TEAM_ID + APPLE_APP_PASSWORD (and the certificate)
+#       present: the bundle and the disk image are notarized and stapled, and
+#       Gatekeeper's verdict is checked with spctl. absent: not notarized.
+#   SPARKLE_PRIVATE_KEY (and a public key in scripts/sparkle-public-key.txt)
+#       present: a stable release also carries appcast.xml, the signed update
+#       feed the app reads. absent: no feed; the app does not update itself.
+# Only the build job reads these secrets, and it has read-only access to the
+# repository. Every action is pinned to a commit.
+#
+# After a stable release the cask job points Casks/awake.rb at it (version
+# and SHA-256) and commits that file to the `homebrew` branch, never to main.
+# With HOMEBREW_TAP_TOKEN set it also commits it to the tap repository
+# ParthJairam07/homebrew-awake (docs/releasing.md, Homebrew cask).
 
 on:
   push:
@@ -123,13 +141,14 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
       package: ${{ steps.version.outputs.package }}
+      signing: ${{ steps.signing.outputs.signing }}
     steps:
       - name: Check out
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
-      - name: Read the version, check the tag against it and name the package
+      - name: Take the version from the tag and name the package
         id: version
         env:
           CHANNEL: ${{ needs.plan.outputs.channel }}
@@ -140,24 +159,27 @@ jobs:
             echo "checked out $head, not $GITHUB_SHA" >&2
             exit 1
           fi
+          # A tag v<version> names the version; build-app.sh writes it into
+          # the bundle. Any other ref (a nightly, a manual run on a branch)
+          # keeps CFBundleShortVersionString from Resources/Info.plist.
           version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)"
           case "$GITHUB_REF" in
             refs/tags/v*)
-              tag="${GITHUB_REF#refs/tags/v}"
-              if [[ "$tag" != "$version" ]]; then
-                echo "tag v$tag does not match CFBundleShortVersionString $version in Resources/Info.plist" >&2
+              version="${GITHUB_REF#refs/tags/v}"
+              if [[ ! "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+                echo "tag $GITHUB_REF_NAME is not v<major>.<minor>.<patch>; install.sh and the update feed need three numbers. Nothing was built or published." >&2
                 exit 1
               fi
               ;;
           esac
-          package="Awake-$version-macos"
+          package="Awake-$version"
           if [[ "$CHANNEL" == nightly ]]; then
             want="^nightly-[0-9]{8}-${GITHUB_SHA:0:12}\$"
             if [[ ! "$NIGHTLY_TAG" =~ $want ]]; then
               echo "nightly tag '$NIGHTLY_TAG' does not name $GITHUB_SHA" >&2
               exit 1
             fi
-            package="Awake-$version-$NIGHTLY_TAG-macos"
+            package="Awake-$version-$NIGHTLY_TAG"
           fi
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "package=$package" >> "$GITHUB_OUTPUT"
@@ -192,26 +214,145 @@ jobs:
       - name: Run tests
         run: swift test
 
-      - name: Build
+      - name: Decide how this build is signed
+        # A secret cannot be tested in a step's `if`, so each is turned into
+        # true or false here and the steps below test the outputs. Only
+        # whether a secret exists reaches this step, never its value.
+        id: signing
+        env:
+          HAVE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' }}
+          HAVE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}
+          HAVE_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
+          CHANNEL: ${{ needs.plan.outputs.channel }}
+        run: |
+          developer_id=false
+          notarize=false
+          signing=adhoc
+          # The update feed belongs to stable releases only: it is what
+          # releases/latest/download/appcast.xml serves.
+          appcast=false
+          if [[ "$CHANNEL" == stable ]]; then
+            if [[ "$HAVE_SPARKLE_KEY" != true ]]; then
+              echo "::notice::SPARKLE_PRIVATE_KEY is not set: this release carries no update feed (appcast.xml). See docs/releasing.md, Updates."
+            elif [[ -z "$(tr -d '[:space:]' < scripts/sparkle-public-key.txt)" ]]; then
+              echo "::warning::SPARKLE_PRIVATE_KEY is set but scripts/sparkle-public-key.txt is empty, so the app carries no update key and no feed is published. Commit the public key (docs/releasing.md, Updates)."
+            else
+              appcast=true
+            fi
+          fi
+          if [[ "$HAVE_CERTIFICATE" == true ]]; then
+            developer_id=true
+            signing=developer-id
+            if [[ "$HAVE_NOTARY" == true ]]; then
+              notarize=true
+              signing=notarized
+            else
+              echo "::warning::APPLE_ID, APPLE_TEAM_ID or APPLE_APP_PASSWORD is not set: this build is signed with Developer ID but not notarized, so macOS still blocks its first launch."
+            fi
+          else
+            echo "::notice::APPLE_CERTIFICATE_P12 or APPLE_CERTIFICATE_PASSWORD is not set: this is an unsigned (ad-hoc) build. See docs/releasing.md, Signing."
+          fi
+          {
+            echo "developer_id=$developer_id"
+            echo "notarize=$notarize"
+            echo "signing=$signing"
+            echo "appcast=$appcast"
+          } >> "$GITHUB_OUTPUT"
+          echo "signing: $signing, update feed: $appcast"
+
+      - name: Import the Developer ID certificate into a temporary keychain
+        id: keychain
+        if: steps.signing.outputs.developer_id == 'true'
+        env:
+          APPLE_CERTIFICATE_P12: ${{ secrets.APPLE_CERTIFICATE_P12 }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          identity="$(.github/scripts/signing-keychain.sh create "$RUNNER_TEMP/awake-signing.keychain-db")"
+          echo "identity=$identity" >> "$GITHUB_OUTPUT"
+
+      - name: Build and sign
         env:
           # build-app.sh compiles the simulate-lid.sh watcher in for "1"; a
           # release never carries it.
           AWAKE_LID_SIMULATION: ""
-        run: scripts/build-app.sh --output dist
+          VERSION: ${{ steps.version.outputs.version }}
+          IDENTITY: ${{ steps.keychain.outputs.identity }}
+        run: |
+          # Empty without the certificate: build-app.sh then signs ad-hoc.
+          if [[ -n "$IDENTITY" ]]; then
+            scripts/build-app.sh --output dist --version "$VERSION" --sign-identity "$IDENTITY"
+          else
+            scripts/build-app.sh --output dist --version "$VERSION"
+          fi
+
+      - name: Notarize and staple the app
+        if: steps.signing.outputs.notarize == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+        run: .github/scripts/notarize.sh dist/Awake.app
 
       - name: Package
+        # After the staple, so the zip and the disk image carry the stapled
+        # bundle. The zip holds Awake.app at its top level (ditto -c -k
+        # --keepParent, in package-release.sh).
+        env:
+          PACKAGE: ${{ steps.version.outputs.package }}
+          IDENTITY: ${{ steps.keychain.outputs.identity }}
+        run: |
+          if [[ -n "$IDENTITY" ]]; then
+            .github/scripts/package-release.sh --app dist/Awake.app --name "$PACKAGE" --output release --sign-identity "$IDENTITY"
+          else
+            .github/scripts/package-release.sh --app dist/Awake.app --name "$PACKAGE" --output release
+          fi
+
+      - name: Notarize and staple the disk image
+        if: steps.signing.outputs.notarize == 'true'
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
+          PACKAGE: ${{ steps.version.outputs.package }}
+        run: .github/scripts/notarize.sh "release/$PACKAGE.dmg"
+
+      - name: Check Gatekeeper accepts the notarized build
+        if: steps.signing.outputs.notarize == 'true'
         env:
           PACKAGE: ${{ steps.version.outputs.package }}
         run: |
-          pkg="$PACKAGE"
-          mkdir -p "release/$pkg"
-          /usr/bin/ditto dist/Awake.app "release/$pkg/Awake.app"
-          cp scripts/install.sh scripts/uninstall.sh "release/$pkg/"
-          (cd release && /usr/bin/ditto -c -k --sequesterRsrc --keepParent "$pkg" "$pkg.zip")
-          (cd release && shasum -a 256 "$pkg.zip" > SHA256SUMS)
-          rm -rf "release/$pkg"
+          spctl -a -vv dist/Awake.app
+          spctl -a -vv -t open --context context:primary-signature "release/$PACKAGE.dmg"
+          # The bundle inside the zip, as a user unpacks it.
+          mkdir unpacked
+          /usr/bin/ditto -x -k "release/$PACKAGE.zip" unpacked
+          spctl -a -vv unpacked/Awake.app
+          xcrun stapler validate unpacked/Awake.app
+
+      - name: Remove the temporary keychain
+        if: always() && steps.signing.outputs.developer_id == 'true'
+        run: .github/scripts/signing-keychain.sh remove "$RUNNER_TEMP/awake-signing.keychain-db"
+
+      - name: Write the checksums
+        # Last, since stapling changes the disk image.
+        env:
+          PACKAGE: ${{ steps.version.outputs.package }}
+        run: |
+          (cd release && shasum -a 256 "$PACKAGE.zip" "$PACKAGE.dmg" install.sh uninstall.sh > SHA256SUMS)
           cat release/SHA256SUMS
-          codesign -dvv dist/Awake.app 2>&1 | grep -E '^(Identifier|Signature|Authority|TeamIdentifier|CDHash)=' || true
+          codesign -dvv dist/Awake.app 2>&1 | grep -E '^(Identifier|Signature|Authority|TeamIdentifier|CDHash|Runtime Version|Timestamp)=' || true
+
+      - name: Generate the update feed
+        # Sparkle's appcast.xml for this release, signed with the EdDSA key.
+        # generate-appcast.sh stops if the key is not the pair of the public
+        # key the app was built with.
+        if: steps.signing.outputs.appcast == 'true'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          PACKAGE: ${{ steps.version.outputs.package }}
+        run: |
+          .github/scripts/generate-appcast.sh --zip "release/$PACKAGE.zip" --tag "$GITHUB_REF_NAME" \
+            --repository "$GITHUB_REPOSITORY" --output release/appcast.xml
 
       - name: Upload the package as a workflow artifact
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -219,7 +360,11 @@ jobs:
           name: ${{ steps.version.outputs.package }}
           path: |
             release/*.zip
+            release/*.dmg
+            release/install.sh
+            release/uninstall.sh
             release/SHA256SUMS
+            release/appcast.xml
           if-no-files-found: error
 
   stable:
@@ -236,6 +381,7 @@ jobs:
       attestations: write  # store the attestation on the repository
     env:
       VERSION: ${{ needs.build.outputs.version }}
+      SIGNING: ${{ needs.build.outputs.signing }}
     steps:
       - name: Download the package
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -246,23 +392,42 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: release/*.zip
+          subject-path: |
+            release/*.zip
+            release/*.dmg
 
       - name: Write the release notes
         run: |
           zip="$(basename release/*.zip)"
-          sum="$(cut -d' ' -f1 release/SHA256SUMS)"
-          signing="Stable release. Ad-hoc signed and not notarized, so macOS blocks the first launch until you allow it in System Settings > Privacy & Security. The checksum and attestation below show this zip is what the Release workflow built from the tagged commit."
+          dmg="$(basename release/*.dmg)"
+          sum="$(awk -v f="$zip" '$2 == f { print $1 }' release/SHA256SUMS)"
+          dmg_sum="$(awk -v f="$dmg" '$2 == f { print $1 }' release/SHA256SUMS)"
+          # What kind of build this is, from the build job (docs/releasing.md,
+          # Signing). The unsigned label is the first thing a reader sees.
+          case "$SIGNING" in
+            notarized)
+              signing="Signed with Developer ID and notarized by Apple, so it opens like any other downloaded app."
+              ;;
+            developer-id)
+              signing="**Not notarized: right-click → Open on first launch.** This build is signed with Developer ID, but Apple has not notarized it, so macOS blocks the first launch. If right-click → Open is refused too, allow it once in System Settings > Privacy & Security (Open Anyway)."
+              ;;
+            *)
+              signing="**Unsigned build: right-click → Open on first launch.** This build is ad-hoc signed and not notarized, because no Developer ID certificate was available when it was built. If right-click → Open is refused too, allow it once in System Settings > Privacy & Security (Open Anyway)."
+              ;;
+          esac
+          origin="Stable release. The checksums and the attestation below show these files are what the Release workflow built from the tagged commit."
           install_note="The installer checks the bundle's signature, identifier and version before asking for your password, but it cannot verify where this bundle came from: that is what the checksum and the attestation above are for, and \`--allow-unverified-origin\` says you checked them. It then installs the app, the recovery agent and the sudoers rule described in the README."
           {
             echo "Awake $VERSION for Apple Silicon Macs with macOS 26 or later. The app is built for arm64 only, so the installer stops on an Intel Mac."
             echo
             echo "$signing"
             echo
+            echo "$origin"
+            echo
             echo "## Verify the download"
             echo
             echo '```bash'
-            echo "shasum -a 256 -c SHA256SUMS"
+            echo "shasum -a 256 -c SHA256SUMS --ignore-missing"
             echo "gh attestation verify $zip -R $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml --source-ref $GITHUB_REF --source-digest $GITHUB_SHA"
             echo '```'
             echo
@@ -270,12 +435,29 @@ jobs:
             echo
             echo "SHA-256 of \`$zip\`: \`$sum\`"
             echo
+            echo "SHA-256 of \`$dmg\`: \`$dmg_sum\`"
+            echo
             echo "## Install"
+            echo
+            echo "Homebrew:"
+            echo
+            echo '```bash'
+            echo "brew tap ParthJairam07/awake && brew install --cask awake"
+            echo '```'
+            echo
+            echo "One line in Terminal. It downloads this release, checks its SHA-256 and asks before it changes anything:"
+            echo
+            echo '```bash'
+            echo "curl -fsSL https://raw.githubusercontent.com/$GITHUB_REPOSITORY/main/scripts/install.sh | bash"
+            echo '```'
+            echo
+            echo "By hand: open \`$dmg\` and drag Awake to Applications, then open it; the Setup window walks through the rest."
+            echo
+            echo "With the installer attached to this release (download \`$zip\` and \`install.sh\` into one folder):"
             echo
             echo '```bash'
             echo "ditto -x -k $zip ."
-            echo "cd ${zip%.zip}"
-            echo "./install.sh --allow-unverified-origin --app ./Awake.app"
+            echo "bash install.sh --allow-unverified-origin --app ./Awake.app"
             echo "open \"\$HOME/Applications/Awake.app\""
             echo '```'
             echo
@@ -289,12 +471,95 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" release/*.zip release/SHA256SUMS \
+          # --generate-notes appends GitHub's list of changes since the
+          # previous release to notes.md.
+          # appcast.xml is there only when the build job had the update key.
+          assets=(release/*.zip release/*.dmg release/install.sh release/uninstall.sh release/SHA256SUMS)
+          if [[ -f release/appcast.xml ]]; then
+            assets+=(release/appcast.xml)
+          fi
+          gh release create "$GITHUB_REF_NAME" "${assets[@]}" \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Awake $VERSION (stable)" \
+            --title "Awake $VERSION" \
             --notes-file notes.md \
+            --generate-notes \
             --verify-tag \
             --latest
+
+  cask:
+    name: Point the Homebrew cask at the stable release
+    needs: [build, stable]
+    # After the release exists, for a pushed tag only, like the stable job.
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write      # create the homebrew branch and commit the cask to it
+    env:
+      VERSION: ${{ needs.build.outputs.version }}
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Download the package
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: ${{ needs.build.outputs.package }}
+          path: release
+
+      - name: Write the cask for this release
+        run: |
+          sum="$(awk -v f="Awake-$VERSION.zip" '$2 == f { print $1 }' release/SHA256SUMS)"
+          .github/scripts/update-cask.sh --version "$VERSION" --sha256 "$sum" --file Casks/awake.rb
+          cat Casks/awake.rb
+
+      - name: Commit the cask to the homebrew branch
+        # Through the contents API: one commit that changes one file, made
+        # with this job's token. The branch starts at the released commit
+        # the first time; main is never written.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          branch=homebrew
+          if ! gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/$branch" --silent 2>/dev/null; then
+            gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/heads/$branch" -f "sha=$GITHUB_SHA" --silent
+            echo "created the $branch branch at $GITHUB_SHA"
+          fi
+          # The file's blob on the branch, which the API wants when it
+          # replaces a file; empty when the branch has no cask yet.
+          blob="$(gh api "repos/$GITHUB_REPOSITORY/contents/Casks/awake.rb?ref=$branch" --jq .sha 2>/dev/null || true)"
+          args=(-f "message=Cask: Awake $VERSION" -f "branch=$branch" -f "content=$(base64 -w 0 Casks/awake.rb)")
+          if [[ -n "$blob" ]]; then
+            args+=(-f "sha=$blob")
+          fi
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/Casks/awake.rb" "${args[@]}" --silent
+          echo "Casks/awake.rb for $VERSION is on the $branch branch"
+
+      - name: See whether the tap repository can be updated
+        id: tap
+        env:
+          HAVE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        run: |
+          echo "update=$HAVE_TAP_TOKEN" >> "$GITHUB_OUTPUT"
+          if [[ "$HAVE_TAP_TOKEN" != true ]]; then
+            echo "::notice::HOMEBREW_TAP_TOKEN is not set: copy Casks/awake.rb from the homebrew branch into ParthJairam07/homebrew-awake by hand (docs/releasing.md, Homebrew cask)."
+          fi
+
+      - name: Commit the cask to the tap repository
+        if: steps.tap.outputs.update == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          TAP: ParthJairam07/homebrew-awake
+        run: |
+          blob="$(gh api "repos/$TAP/contents/Casks/awake.rb" --jq .sha 2>/dev/null || true)"
+          args=(-f "message=awake $VERSION" -f "content=$(base64 -w 0 Casks/awake.rb)")
+          if [[ -n "$blob" ]]; then
+            args+=(-f "sha=$blob")
+          fi
+          gh api --method PUT "repos/$TAP/contents/Casks/awake.rb" "${args[@]}" --silent
+          echo "Casks/awake.rb for $VERSION is in $TAP"
 
   nightly:
     name: Attest and publish the nightly prerelease
@@ -310,6 +575,7 @@ jobs:
       attestations: write  # store the attestation on the repository
     env:
       VERSION: ${{ needs.build.outputs.version }}
+      SIGNING: ${{ needs.build.outputs.signing }}
       TAG: ${{ needs.plan.outputs.tag }}
     steps:
       - name: Download the package
@@ -321,15 +587,32 @@ jobs:
       - name: Attest build provenance
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          subject-path: release/*.zip
+          subject-path: |
+            release/*.zip
+            release/*.dmg
 
       - name: Write the release notes
         run: |
           zip="$(basename release/*.zip)"
-          sum="$(cut -d' ' -f1 release/SHA256SUMS)"
+          dmg="$(basename release/*.dmg)"
+          sum="$(awk -v f="$zip" '$2 == f { print $1 }' release/SHA256SUMS)"
+          dmg_sum="$(awk -v f="$dmg" '$2 == f { print $1 }' release/SHA256SUMS)"
           channel="Nightly prerelease: an automatic build of \`main\` at \`$GITHUB_SHA\`, for trying the newest changes. Nobody chose this commit as a release, it may be broken, and it is never marked Latest. The latest stable release is at $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/latest."
           version_note="The app reports version $VERSION, the version in Resources/Info.plist at that commit, so the app itself does not tell nightlies apart. The tag \`$TAG\` and the zip's name identify this build."
-          signing="Ad-hoc signed and not notarized, so macOS blocks the first launch until you allow it in System Settings > Privacy & Security. The checksum and attestation below show this zip is what the Release workflow built from that commit of main."
+          # What kind of build this is, from the build job (docs/releasing.md,
+          # Signing). The unsigned label is the first thing a reader sees.
+          case "$SIGNING" in
+            notarized)
+              signing="Signed with Developer ID and notarized by Apple, so it opens like any other downloaded app."
+              ;;
+            developer-id)
+              signing="**Not notarized: right-click → Open on first launch.** This build is signed with Developer ID, but Apple has not notarized it, so macOS blocks the first launch. If right-click → Open is refused too, allow it once in System Settings > Privacy & Security (Open Anyway)."
+              ;;
+            *)
+              signing="**Unsigned build: right-click → Open on first launch.** This build is ad-hoc signed and not notarized, because no Developer ID certificate was available when it was built. If right-click → Open is refused too, allow it once in System Settings > Privacy & Security (Open Anyway)."
+              ;;
+          esac
+          origin="The checksums and the attestation below show these files are what the Release workflow built from that commit of main."
           install_note="The installer checks the bundle's signature, identifier and version before asking for your password, but it cannot verify where this bundle came from: that is what the checksum and the attestation above are for, and \`--allow-unverified-origin\` says you checked them. It then installs the app, the recovery agent and the sudoers rule described in the README."
           {
             echo "Awake $VERSION for Apple Silicon Macs with macOS 26 or later. The app is built for arm64 only, so the installer stops on an Intel Mac."
@@ -340,10 +623,12 @@ jobs:
             echo
             echo "$signing"
             echo
+            echo "$origin"
+            echo
             echo "## Verify the download"
             echo
             echo '```bash'
-            echo "shasum -a 256 -c SHA256SUMS"
+            echo "shasum -a 256 -c SHA256SUMS --ignore-missing"
             echo "gh attestation verify $zip -R $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml --source-ref $GITHUB_REF --source-digest $GITHUB_SHA"
             echo '```'
             echo
@@ -351,12 +636,17 @@ jobs:
             echo
             echo "SHA-256 of \`$zip\`: \`$sum\`"
             echo
+            echo "SHA-256 of \`$dmg\`: \`$dmg_sum\`"
+            echo
             echo "## Install"
+            echo
+            echo "By hand: open \`$dmg\` and drag Awake to Applications, then open it; the Setup window walks through the rest. Homebrew and the one-line installer install the latest stable release, not a nightly."
+            echo
+            echo "With the installer attached to this release (download \`$zip\` and \`install.sh\` into one folder):"
             echo
             echo '```bash'
             echo "ditto -x -k $zip ."
-            echo "cd ${zip%.zip}"
-            echo "./install.sh --allow-unverified-origin --app ./Awake.app"
+            echo "bash install.sh --allow-unverified-origin --app ./Awake.app"
             echo "open \"\$HOME/Applications/Awake.app\""
             echo '```'
             echo
@@ -385,7 +675,7 @@ jobs:
           day="${day%%-*}"
           # gh release create fails if the tag already has a release, so a
           # published nightly's assets are never replaced.
-          gh release create "$TAG" release/*.zip release/SHA256SUMS \
+          gh release create "$TAG" release/*.zip release/*.dmg release/install.sh release/uninstall.sh release/SHA256SUMS \
             --repo "$GITHUB_REPOSITORY" \
             --title "Awake nightly ${day:0:4}-${day:4:2}-${day:6:2} (${GITHUB_SHA:0:12})" \
             --notes-file notes.md \

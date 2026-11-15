@@ -14,6 +14,9 @@ enum StatusMenu {
             case separator
             case settings
             case quit
+            /// Step E: the app-level items `withAppItems` adds.
+            case checkForUpdates
+            case setup
             /// Relaunch this browser with the occlusion flags. Carries the
             /// bundle id and name, so the item still names the same browser
             /// after a scan replaces the list.
@@ -31,6 +34,22 @@ enum StatusMenu {
 
     static let settingsTitle = "Settings\u{2026}"
     static let quitTitle = "Quit Awake"
+    static let checkForUpdatesTitle = "Check for Updates\u{2026}"
+    static let setupTitle = "Setup\u{2026}"
+
+    /// Step E: `items` with the app-level items the app delegate wires up,
+    /// placed after Settings… and before Quit. A menu built without them
+    /// (tests, a controller with no updater) is unchanged.
+    static func withAppItems(_ items: [Item], checkForUpdates: Bool, setup: Bool = false) -> [Item] {
+        var extra: [Item] = []
+        if setup { extra.append(Item(title: setupTitle, kind: .setup)) }
+        if checkForUpdates { extra.append(Item(title: checkForUpdatesTitle, kind: .checkForUpdates)) }
+        guard !extra.isEmpty else { return items }
+        var out = items
+        let at = out.firstIndex { $0.kind == .settings }.map { $0 + 1 } ?? out.endIndex
+        out.insert(contentsOf: extra, at: at)
+        return out
+    }
 
     /// Disabled status lines, a separator, then Settings… and Quit. Empty
     /// lines are dropped, and the separator only appears when something
@@ -143,7 +162,9 @@ enum StatusMenu {
         settings: Selector,
         quit: Selector,
         relaunchBrowser: Selector,
-        stopWaitingForOutput: Selector
+        stopWaitingForOutput: Selector,
+        checkForUpdates: Selector? = nil,
+        setup: Selector? = nil
     ) -> NSMenu {
         let menu = NSMenu()
         menu.autoenablesItems = false
@@ -167,6 +188,14 @@ enum StatusMenu {
                 menu.addItem(action(title: item.title, selector: settings, key: ",", target: target))
             case .quit:
                 menu.addItem(action(title: item.title, selector: quit, key: "q", target: target))
+            case .checkForUpdates:
+                if let checkForUpdates {
+                    menu.addItem(action(title: item.title, selector: checkForUpdates, key: "", target: target))
+                }
+            case .setup:
+                if let setup {
+                    menu.addItem(action(title: item.title, selector: setup, key: "", target: target))
+                }
             case let .relaunchBrowser(browser):
                 let entry = action(title: item.title, selector: relaunchBrowser, key: "", target: target)
                 entry.representedObject = browser

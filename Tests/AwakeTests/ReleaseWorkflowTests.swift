@@ -131,7 +131,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(text.contains("        type: boolean\n        default: false\n"), "a manual run publishes nothing unless asked")
         XCTAssertFalse(text.contains("pull_request"), "never runs for pull requests")
         XCTAssertTrue(text.contains("permissions: {}"), "nothing at the top level")
-        XCTAssertEqual(Set(try releaseJobs().keys), ["plan", "build", "stable", "nightly"])
+        XCTAssertEqual(Set(try releaseJobs().keys), ["plan", "build", "stable", "cask", "nightly"])
 
         let plan = try job("plan").joined(separator: "\n")
         XCTAssertTrue(plan.contains(#"if [[ "$NIGHTLY_INPUT" != true ]]; then\#n                printf 'channel=artifact\nbuild=true\n' >> "$GITHUB_OUTPUT""#), "a manual run without the input only builds")
@@ -144,13 +144,15 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(nightly.contains("    if: needs.plan.outputs.channel == 'nightly' && github.ref == 'refs/heads/main' && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')"), "a nightly is gated on main and on a scheduled or manual run")
         for (id, body) in [("stable", stable.joined(separator: "\n")), ("nightly", nightly.joined(separator: "\n"))] {
             XCTAssertTrue(body.contains("--signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml --source-ref $GITHUB_REF --source-digest $GITHUB_SHA"), "\(id): the notes pin the verify command to this workflow, the ref and the commit")
-            XCTAssertTrue(body.contains(#"echo "./install.sh --allow-unverified-origin --app ./Awake.app""#), "\(id): the notes' install command carries the origin opt-in install.sh needs for an ad-hoc bundle")
+            XCTAssertTrue(body.contains(#"echo "bash install.sh --allow-unverified-origin --app ./Awake.app""#), "\(id): the notes' install command carries the origin opt-in install.sh needs for a prebuilt bundle")
             XCTAssertTrue(body.contains("attest-build-provenance"), "\(id): build provenance is attested")
         }
         XCTAssertTrue(text.contains("shasum -a 256"), "a checksum file is produced")
-        XCTAssertTrue(text.contains("ditto -c -k --sequesterRsrc --keepParent"), "zipped the way Finder expects")
-        XCTAssertTrue(text.contains("CFBundleShortVersionString"), "the tag is checked against the bundle version")
-        XCTAssertTrue(text.contains("scripts/build-app.sh --output"), "built with the same script as install.sh")
+        XCTAssertTrue(text.contains(".github/scripts/package-release.sh --app dist/Awake.app"), "packaged by the script the dry run in ci.yml uses")
+        XCTAssertTrue(try packageScript().contains(#""$DITTO" -c -k --sequesterRsrc --keepParent "$APP""#), "zipped the way Finder expects, Awake.app at the top level")
+        XCTAssertTrue(text.contains(#"version="${GITHUB_REF#refs/tags/v}""#), "a tag names the version")
+        XCTAssertTrue(text.contains("CFBundleShortVersionString"), "any other ref keeps the version in Resources/Info.plist")
+        XCTAssertTrue(text.contains(#"scripts/build-app.sh --output dist --version "$VERSION""#), "built with the same script as install.sh, with the version written in")
         XCTAssertFalse(text.contains("--allow-unsigned"), "no Gatekeeper workarounds")
     }
 
@@ -160,7 +162,7 @@ final class ReleaseWorkflowTests: XCTestCase {
     /// it exists, and nothing in the workflow moves, deletes or replaces a
     /// tag, a release or an asset.
     func testStableAndNightlyNeverShareTheirReleaseFlags() throws {
-        XCTAssertEqual(try releaseCreateFlags(try job("stable")), ["--repo", "--title", "--notes-file", "--verify-tag", "--latest"])
+        XCTAssertEqual(try releaseCreateFlags(try job("stable")), ["--repo", "--title", "--notes-file", "--generate-notes", "--verify-tag", "--latest"])
         XCTAssertEqual(try releaseCreateFlags(try job("nightly")), ["--repo", "--title", "--notes-file", "--verify-tag", "--prerelease", "--latest=false"])
         let plan = try job("plan").joined(separator: "\n")
         XCTAssertTrue(plan.contains(#"sha12="${GITHUB_SHA:0:12}""#))
@@ -169,7 +171,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertTrue(plan.contains(#"printf 'channel=nightly\nbuild=false\n' >> "$GITHUB_OUTPUT""#), "a commit that already has a nightly is skipped")
         let build = try job("build").joined(separator: "\n")
         XCTAssertTrue(build.contains(#"want="^nightly-[0-9]{8}-${GITHUB_SHA:0:12}\$""#), "the build checks the tag names the commit it built")
-        XCTAssertTrue(build.contains(#"package="Awake-$version-$NIGHTLY_TAG-macos""#), "a nightly zip carries its tag in its name")
+        XCTAssertTrue(build.contains(#"package="Awake-$version-$NIGHTLY_TAG""#), "a nightly zip carries its tag in its name")
         let nightly = try job("nightly").joined(separator: "\n")
         XCTAssertTrue(nightly.contains(#"gh api "repos/$GITHUB_REPOSITORY/git/refs" -f "ref=refs/tags/$TAG" -f "sha=$GITHUB_SHA""#), "the tag is created on the built commit, failing if it exists")
         let text = try releaseWorkflow()
@@ -239,7 +241,7 @@ final class ReleaseWorkflowTests: XCTestCase {
         let tag = "nightly-20261009-0123456789ab"
         let post = "api repos/ParthJairam07/awake/git/refs -f ref=refs/tags/\(tag) -f sha=\(sha) --silent"
         let get = "api repos/ParthJairam07/awake/git/ref/tags/\(tag) --jq .object.sha"
-        let create = "release create \(tag) release/Awake-0.1.0-\(tag)-macos.zip release/SHA256SUMS --repo ParthJairam07/awake"
+        let create = "release create \(tag) release/Awake-0.1.0-\(tag).zip release/Awake-0.1.0-\(tag).dmg release/install.sh release/uninstall.sh release/SHA256SUMS --repo ParthJairam07/awake"
             + " --title Awake nightly 2026-10-09 (0123456789ab) --notes-file notes.md --verify-tag --prerelease --latest=false"
         // Creating the ref exits with the status in create-status; reading it
         // prints the file `at`, or fails as GitHub does when there is none.
@@ -253,7 +255,8 @@ final class ReleaseWorkflowTests: XCTestCase {
             esac
             """
         func publish(createStatus: Int, at: String?) throws -> StepResult {
-            var files = ["release/Awake-0.1.0-\(tag)-macos.zip": "", "release/SHA256SUMS": "", "notes.md": "notes\n",
+            var files = ["release/Awake-0.1.0-\(tag).zip": "", "release/Awake-0.1.0-\(tag).dmg": "", "release/install.sh": "", "release/uninstall.sh": "",
+                         "release/SHA256SUMS": "", "notes.md": "notes\n",
                          "create-status": "\(createStatus)\n"]
             if let at { files["at"] = at + "\n" }
             return try runStep(script, gh: stub, files: files, environment: ["GITHUB_SHA": sha, "TAG": tag])
@@ -353,29 +356,177 @@ final class ReleaseWorkflowTests: XCTestCase {
                           calls: read("calls").split(separator: "\n").map(String.init))
     }
 
-    /// Releases are ad-hoc signed and not notarized: the workflow reads no
-    /// secret, imports no certificate, notarizes nothing, build-app.sh has
-    /// no Developer ID path (no signing identity from the environment, no
-    /// hardened runtime, no timestamp), and install.sh has no Developer ID
-    /// origin check (no Gatekeeper assessment, no expected team) that could
-    /// let a bundle skip --allow-unverified-origin. RecoveryScriptTests'
-    /// testInstallFromPrebuiltAppNeedsTheOptInWhateverItsSignatureNames
-    /// checks the behaviour.
-    func testTheReleaseIsAdHocSignedWithNoSigningOrNotarizationStep() throws {
-        let text = try releaseWorkflow()
-        for absent in ["secrets.", "security ", "create-keychain", "notarytool", "stapler", "AWAKE_SIGN", "AWAKE_NOTARY"] {
-            XCTAssertFalse(text.contains(absent), "release.yml contains \(absent)")
+    /// Signing has two modes and neither is required. The certificate and
+    /// the notary credentials are repository secrets that only the build job
+    /// reads, each through a step's `env`, never in a script's text. One
+    /// step turns "is the secret set" into outputs, and every step that
+    /// needs a secret is gated on those outputs, so a run without secrets
+    /// skips them and still packages an ad-hoc build. The keychain is
+    /// removed even when a later step fails.
+    func testSigningSecretsAreOptionalAndOnlyTheBuildJobReadsThem() throws {
+        for (id, body) in try releaseJobs() where id != "build" && id != "cask" {
+            XCTAssertFalse(body.joined(separator: "\n").contains("secrets."), "the \(id) job reads a secret")
         }
-        let repo = workflowsDir.deletingLastPathComponent().deletingLastPathComponent()
-        let build = try String(contentsOf: repo.appendingPathComponent("scripts/build-app.sh"), encoding: .utf8)
-        for absent in ["AWAKE_SIGN_IDENTITY", "--options", "--timestamp"] {
-            XCTAssertFalse(build.contains(absent), "build-app.sh contains \(absent)")
+        let build = try job("build")
+        let secretLines = build.filter { $0.contains("secrets.") }
+        XCTAssertFalse(secretLines.isEmpty)
+        for line in secretLines {
+            XCTAssertNotNil(line.range(of: #"^          [A-Z0-9_]+: \$\{\{ .*secrets\.[A-Z0-9_]+.* \}\}$"#, options: .regularExpression),
+                            "a secret outside a step's env: \(line)")
         }
-        XCTAssertTrue(build.contains(#""$CODESIGN" --force --sign - "$APP""#), "build-app.sh signs ad-hoc")
-        let install = try String(contentsOf: repo.appendingPathComponent("scripts/install.sh"), encoding: .utf8)
+        let names = Set(secretLines.flatMap { line in
+            line.components(separatedBy: "secrets.").dropFirst().map { String($0.prefix { $0.isLetter || $0.isNumber || $0 == "_" }) }
+        })
+        XCTAssertEqual(names, ["APPLE_CERTIFICATE_P12", "APPLE_CERTIFICATE_PASSWORD", "APPLE_ID", "APPLE_TEAM_ID", "APPLE_APP_PASSWORD", "SPARKLE_PRIVATE_KEY"])
+
+        // Each step, as (name, lines up to the next step).
+        var steps: [(name: String, body: [String])] = []
+        for line in build {
+            if line.hasPrefix("      - name: ") {
+                steps.append((String(line.dropFirst("      - name: ".count)), []))
+            } else if !steps.isEmpty {
+                steps[steps.count - 1].body.append(line)
+            }
+        }
+        let gates = [
+            "Import the Developer ID certificate into a temporary keychain": "        if: steps.signing.outputs.developer_id == 'true'",
+            "Notarize and staple the app": "        if: steps.signing.outputs.notarize == 'true'",
+            "Notarize and staple the disk image": "        if: steps.signing.outputs.notarize == 'true'",
+            "Check Gatekeeper accepts the notarized build": "        if: steps.signing.outputs.notarize == 'true'",
+            "Remove the temporary keychain": "        if: always() && steps.signing.outputs.developer_id == 'true'",
+            "Generate the update feed": "        if: steps.signing.outputs.appcast == 'true'",
+        ]
+        for (name, gate) in gates {
+            let step = try XCTUnwrap(steps.first { $0.name == name }, "no step \(name)")
+            XCTAssertTrue(step.body.contains(gate), "\(name) is not gated on the signing outputs")
+        }
+        for step in steps where step.body.contains(where: { $0.contains("secrets.") }) && step.name != "Decide how this build is signed" {
+            XCTAssertNotNil(gates[step.name], "\(step.name) reads a secret without a gate")
+        }
+        let decide = try XCTUnwrap(steps.first { $0.name == "Decide how this build is signed" }).body.joined(separator: "\n")
+        XCTAssertTrue(decide.contains("HAVE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE_P12 != '' && secrets.APPLE_CERTIFICATE_PASSWORD != '' }}"), "only whether the secret exists reaches the step")
+        XCTAssertTrue(decide.contains("HAVE_NOTARY: ${{ secrets.APPLE_ID != '' && secrets.APPLE_TEAM_ID != '' && secrets.APPLE_APP_PASSWORD != '' }}"))
+        XCTAssertTrue(decide.contains("HAVE_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}"))
+        XCTAssertTrue(decide.contains(#"if [[ "$CHANNEL" == stable ]]; then"#), "only a stable release carries the update feed")
+        let stable = try job("stable").joined(separator: "\n")
+        XCTAssertTrue(stable.contains("if [[ -f release/appcast.xml ]]; then\n            assets+=(release/appcast.xml)"), "the feed is published only when it was generated")
+        XCTAssertFalse(try job("nightly").joined(separator: "\n").contains("appcast"), "a nightly never replaces the feed")
+        let order = steps.map(\.name)
+        let index = { (name: String) in try XCTUnwrap(order.firstIndex(of: name), name) }
+        XCTAssertLessThan(try index("Notarize and staple the app"), try index("Package"), "the zip and the disk image carry the stapled bundle")
+        XCTAssertLessThan(try index("Notarize and staple the disk image"), try index("Write the checksums"), "stapling changes the disk image, so the checksums come after it")
+        let gatekeeper = try XCTUnwrap(steps.first { $0.name == "Check Gatekeeper accepts the notarized build" }).body.joined(separator: "\n")
+        XCTAssertTrue(gatekeeper.contains("spctl -a -vv dist/Awake.app"))
+
+        // The notes say which kind of build a release is, the unsigned
+        // label first.
+        for id in ["stable", "nightly"] {
+            let body = try job(id).joined(separator: "\n")
+            XCTAssertTrue(body.contains("      SIGNING: ${{ needs.build.outputs.signing }}"), id)
+            XCTAssertTrue(body.contains(#"signing="**Unsigned build: right-click → Open on first launch.**"#), "\(id): the unsigned label")
+            XCTAssertTrue(body.contains("notarized)\n              signing=\"Signed with Developer ID and notarized by Apple"), "\(id): the notarized label")
+        }
+
+        // build-app.sh signs with an identity only when the flag names one:
+        // nothing in a contributor's environment can switch it on.
+        let build_app = try String(contentsOf: repoRoot.appendingPathComponent("scripts/build-app.sh"), encoding: .utf8)
+        for absent in ["AWAKE_SIGN_IDENTITY", "${SIGN_IDENTITY:-", "$AWAKE_SIGN"] {
+            XCTAssertFalse(build_app.contains(absent), "build-app.sh contains \(absent)")
+        }
+        XCTAssertTrue(build_app.contains(#""$CODESIGN" --force --sign - "$APP""#), "build-app.sh signs ad-hoc without the flag")
+        XCTAssertTrue(build_app.contains(#""$CODESIGN" --force --sign "$SIGN_IDENTITY" --options runtime --timestamp --entitlements "$ENTITLEMENTS" "$APP""#),
+                      "with the flag: hardened runtime, timestamp and entitlements, which notarization needs")
+        // install.sh still has no Developer ID origin check (no Gatekeeper
+        // assessment, no expected team) that could let a bundle skip
+        // --allow-unverified-origin. RecoveryScriptTests'
+        // testInstallFromPrebuiltAppNeedsTheOptInWhateverItsSignatureNames
+        // checks the behaviour.
+        let install = try String(contentsOf: repoRoot.appendingPathComponent("scripts/install.sh"), encoding: .utf8)
         for absent in ["spctl", "SPCTL", "EXPECTED_TEAM_ID", "TeamIdentifier"] {
             XCTAssertFalse(install.contains(absent), "install.sh contains \(absent)")
         }
+    }
+
+    /// The entitlements of the Developer ID build: not sandboxed, and only
+    /// what the hardened runtime would otherwise refuse (Location Services,
+    /// for Wi-Fi names). No exception that weakens the runtime.
+    func testTheEntitlementsGrantLocationAndNothingThatWeakensTheRuntime() throws {
+        let data = try Data(contentsOf: repoRoot.appendingPathComponent("scripts/entitlements.plist"))
+        let plist = try XCTUnwrap(try PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any])
+        XCTAssertEqual(plist["com.apple.security.personal-information.location"] as? Bool, true)
+        XCTAssertEqual(Set(plist.keys), ["com.apple.security.personal-information.location"])
+    }
+
+    /// After a stable release, and only then, the cask job rewrites the
+    /// cask's version and checksum from the release's SHA256SUMS and
+    /// commits that one file to the `homebrew` branch through the contents
+    /// API: main is never written, nothing is pushed with git, and the
+    /// checkout keeps no credentials. The tap repository is updated only
+    /// when its token exists, and that token is the only secret the job
+    /// reads.
+    func testTheCaskJobCommitsOnlyTheCaskAndOnlyAfterAStableRelease() throws {
+        let body = try job("cask")
+        let text = body.joined(separator: "\n")
+        XCTAssertTrue(body.contains("    needs: [build, stable]"), "after the release exists")
+        XCTAssertTrue(body.contains("    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"), "for a pushed tag only")
+        XCTAssertEqual(try permissionScopes(body, job: "cask"), ["contents: write"])
+        XCTAssertTrue(text.contains("uses: actions/checkout@") && text.contains("          persist-credentials: false"), "the checkout keeps no token")
+        XCTAssertTrue(text.contains(#".github/scripts/update-cask.sh --version "$VERSION" --sha256 "$sum" --file Casks/awake.rb"#))
+        XCTAssertTrue(text.contains(#"sum="$(awk -v f="Awake-$VERSION.zip" '$2 == f { print $1 }' release/SHA256SUMS)""#), "the checksum of the zip the cask downloads")
+        XCTAssertTrue(text.contains("branch=homebrew"))
+        XCTAssertTrue(text.contains(#"gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/Casks/awake.rb""#))
+        XCTAssertFalse(text.contains("branch=main") || text.contains("refs/heads/main"), "main is never written")
+        let secretLines = body.filter { $0.contains("secrets.") }
+        XCTAssertEqual(secretLines.map { $0.trimmingCharacters(in: .whitespaces) },
+                       ["HAVE_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}", "GH_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}"])
+        let tapStep = try XCTUnwrap(body.firstIndex(of: "      - name: Commit the cask to the tap repository"))
+        XCTAssertEqual(body[tapStep + 1], "        if: steps.tap.outputs.update == 'true'", "skipped without the token")
+    }
+
+    /// The cask in the repository is a template with the fields the cask
+    /// job rewrites, the release zip's URL, a livecheck and a zap stanza.
+    func testTheCaskNamesTheReleaseZipAndWhatZapRemoves() throws {
+        let cask = try String(contentsOf: repoRoot.appendingPathComponent("Casks/awake.rb"), encoding: .utf8)
+        for line in [
+            #"cask "awake" do"#,
+            ##"  url "https://github.com/ParthJairam07/awake/releases/download/v#{version}/Awake-#{version}.zip""##,
+            "  livecheck do", "    strategy :github_latest",
+            "  depends_on arch: :arm64", "  depends_on macos: :tahoe",
+            ##"  app "Awake.app", target: "#{Dir.home}/Applications/Awake.app""##,
+            #"  uninstall launchctl: "com.awake.backstop","#, #"            quit:      "com.parthjairam.awake""#,
+            #"  zap delete: "/etc/sudoers.d/awake","#,
+            #"        "~/Library/Application Support/Awake","#, #"        "~/Library/LaunchAgents/com.awake.backstop.plist","#, #"        "~/Library/Logs/Awake","#,
+        ] {
+            XCTAssertTrue(lines(cask).contains(line), "Casks/awake.rb lacks: \(line)")
+        }
+        XCTAssertEqual(lines(cask).filter { $0.range(of: #"^  version "[^"]*"$"#, options: .regularExpression) != nil }.count, 1)
+        XCTAssertEqual(lines(cask).filter { $0.range(of: #"^  sha256 "[0-9a-f]{64}"$"#, options: .regularExpression) != nil }.count, 1)
+        XCTAssertFalse(cask.contains("auto_updates"), "an unsigned build does not update itself, so brew must keep upgrading it")
+    }
+
+    /// ci.yml builds and packages an ad-hoc 0.0.0-ci on pull requests, with
+    /// the same two scripts release.yml uses and no secret, and uploads the
+    /// zip, so packaging breaks on the pull request and not on the tag.
+    func testCIHasAReleaseDryRunOnPullRequests() throws {
+        let ci = try XCTUnwrap(try workflows().first { $0.name == "ci.yml" }).text
+        let all = lines(ci)
+        let start = try XCTUnwrap(all.firstIndex(of: "  release-dry-run:"))
+        let end = all[(start + 1)...].firstIndex { $0.hasPrefix("  ") && !$0.hasPrefix("   ") && $0.hasSuffix(":") } ?? all.endIndex
+        let body = Array(all[start..<end])
+        let text = body.joined(separator: "\n")
+        XCTAssertTrue(body.contains("    if: github.event_name == 'pull_request'"))
+        XCTAssertTrue(body.contains("    runs-on: macos-26"))
+        XCTAssertTrue(body.contains("      VERSION: 0.0.0-ci"))
+        XCTAssertTrue(body.contains(#"        run: scripts/build-app.sh --version "$VERSION" --output dist"#))
+        XCTAssertTrue(text.contains(#".github/scripts/package-release.sh --app dist/Awake.app --name "Awake-$VERSION" --output release"#))
+        XCTAssertTrue(text.contains("grep -qx 'Signature=adhoc' signature.txt"), "ad-hoc: no certificate")
+        XCTAssertTrue(text.contains("uses: actions/upload-artifact@") && text.contains("          path: release/Awake-0.0.0-ci.zip"))
+        XCTAssertFalse(text.contains("secrets."), "the dry run reads no secret")
+        XCTAssertFalse(text.contains("--sign-identity"))
+    }
+
+    private func packageScript() throws -> String {
+        try String(contentsOf: repoRoot.appendingPathComponent(".github/scripts/package-release.sh"), encoding: .utf8)
     }
 
     /// The plan and build jobs have read-only access; only the jobs that
@@ -438,15 +589,15 @@ final class ReleaseWorkflowTests: XCTestCase {
         return String(readme[install.upperBound..<end])
     }
 
-    /// The scripts the zip carries sit at its top level, so the folder above
-    /// theirs is wherever the user unpacked it (/tmp, Downloads). They take
+    /// The scripts a release carries are downloaded next to the zip, so the
+    /// folder above theirs is wherever the user put them (/tmp, Downloads). They take
     /// sibling scripts from their own folder only; a path built from the
     /// parent of the script's folder would run whatever another account put
     /// there. RecoveryScriptTests runs both from a zip layout.
     func testTheZipsScriptsTakeNothingFromTheFolderAboveTheirOwn() throws {
-        let text = try releaseWorkflow()
-        let copy = try XCTUnwrap(lines(text).first { $0.contains(#""release/$pkg/""#) && $0.contains("cp ") }, "no cp into the package folder")
-        let shipped = copy.split(separator: " ").map(String.init).filter { $0.hasPrefix("scripts/") }
+        let copy = try XCTUnwrap(lines(try packageScript()).first { $0.hasPrefix("cp ") && $0.contains(#""$OUTPUT/""#) }, "no cp into the release folder")
+        let shipped = copy.split(separator: " ").map(String.init).filter { $0.hasPrefix(#""$ROOT/scripts/"#) }
+            .map { String($0.dropFirst(#""$ROOT/"#.count).dropLast()) }
         XCTAssertEqual(shipped, ["scripts/install.sh", "scripts/uninstall.sh"])
         let repo = workflowsDir.deletingLastPathComponent().deletingLastPathComponent()
         for path in shipped {

@@ -34,6 +34,8 @@
 	<string>Awake needs your location permission so macOS lets it see Wi-Fi network names and rejoin your hotspot.</string>
 	<key>NSPrincipalClass</key>
 	<string>NSApplication</string>
+	<key>SUFeedURL</key>
+	<string>https://github.com/ParthJairam07/awake/releases/latest/download/appcast.xml</string>
 	<key>AwakeResumeFrozenVersion</key>
 	<integer>1</integer>
 	<key>NSHumanReadableCopyright</key>

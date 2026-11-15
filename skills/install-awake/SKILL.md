@@ -29,8 +29,10 @@ user the exact command to run in Terminal and wait for them to say it finished.
    "What gets installed" section lists them. `--allow-unverified-origin`
    tells the installer that both download checks passed. Never suggest it
    when they did not.
-5. **First launch.** macOS blocks the first launch of a downloaded app until
-   the user allows it in System Settings > Privacy & Security.
+5. **First launch.** The release notes open with how the build is signed. An
+   unsigned build is blocked on first launch until the user right-clicks it
+   and chooses Open, or allows it in System Settings > Privacy & Security. A
+   Setup window opens on first launch; its steps can be skipped.
 6. **Confirm.** The eye shows in the menu bar, and
    `launchctl print gui/$(id -u)/com.awake.backstop` finds the recovery
    agent. Ask the user to review the lid-close options in Settings before the
