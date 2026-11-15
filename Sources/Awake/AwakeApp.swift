@@ -75,6 +75,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 Log.error("could not save config after the launch at login check: \(error.localizedDescription)")
             }
         }
+        // The phone app runs with the app, not with a session: the phone
+        // starts sessions too (phase 3).
+        manager.services?.startPhoneApp(for: manager)
         let settings = SettingsWindow { [manager, secrets, phoneSecrets, locationPermission, loginItem, releases, updater] in
             AnyView(
                 SettingsView(

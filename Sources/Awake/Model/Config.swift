@@ -200,6 +200,14 @@ struct Config: Codable, Equatable, Sendable {
     /// for a config.json without the key, so an upgrade shows it once.
     var onboardingDone: Bool = false
 
+    // Phase 3
+    /// Serve the phone web app and its API on the Mac's Tailscale address
+    /// (and loopback), for paired phones only. Off until the user turns
+    /// it on in Settings.
+    var phoneApp: Bool = false
+    /// The port the phone app listens on (1024...65535).
+    var phonePort: Int = 7788
+
     static let defaultPresets: [TimeInterval] = [
         30 * 60,
         1 * 3600,
@@ -311,6 +319,9 @@ struct Config: Codable, Equatable, Sendable {
         // Step E
         automaticUpdates = try c.decodeIfPresent(Bool.self, forKey: .automaticUpdates) ?? d.automaticUpdates
         onboardingDone = try c.decodeIfPresent(Bool.self, forKey: .onboardingDone) ?? d.onboardingDone
+        // Phase 3
+        phoneApp = try c.decodeIfPresent(Bool.self, forKey: .phoneApp) ?? d.phoneApp
+        phonePort = try c.decodeIfPresent(Int.self, forKey: .phonePort) ?? d.phonePort
     }
 }
 

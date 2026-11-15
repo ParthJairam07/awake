@@ -71,9 +71,13 @@ Still to do for phase 2: the real-Mac check (real Claude Code and Codex sessions
 
 ### 3.4 Phase 3: the phone controls the Mac (weeks 9–12)
 
-- A phone web app (PWA) served from the Mac over **Tailscale**; no port forwarding, device-authenticated, pairing code on first use.
-- Screens: session (time left, extend, end), agents (cards, nudge, answer prompt, pause, stop), machine (battery, trend, charger watts, temperature, throttle, memory, disk, network type, data used), security (lock, screenshot, who is connected), log.
-- Actions are allow-listed, signed, rate-limited and written to an audit log. "Panic" ends the session and locks the screen.
+**Done** (setup and security model in [docs/phone.md](docs/phone.md)):
+
+- **Server**: `PhoneServer` (`Sources/Awake/Phone/`), HTTP/1.1 on `NWListener`, bound only to the Mac's Tailscale addresses (a `utun` interface with a `100.64.0.0/10` address, plus the tailnet IPv6 address) and `127.0.0.1`, on `phonePort` (7788), when `phoneApp` is on (off by default). Never all interfaces. Without Tailscale it serves loopback only and Settings and the menu say "Tailscale not found". Plain HTTP on the tailnet; `tailscale serve --bg 7788` gives https, and Settings shows that address and its QR code when it finds it.
+- **Pairing and auth**: a six-digit code (5 minutes, 5 tries, then a new one) shown with a QR code in Settings and in the menu; a 32-byte bearer token per phone, stored on the Mac only as a salted SHA-256 in the login keychain; Forget per phone and Forget all. 30 requests / 10 s per phone, 5 failed sign-ins a minute per address then a 5-minute block. Every action goes to an owner-only `audit.log`, rotated at 5 MB.
+- **API**, allow-listed, everything else 404: status and a server-sent event stream of it, session start / extend / end, lock, panic (lock, then end the session, which resumes what Awake froze), screenshot (ScreenCaptureKit, in memory, 403 without Screen Recording), log tail, machine readings, agent actions through `AgentActing`.
+- **PWA**, no framework and no build step, embedded in the app: Session, Agents, Machine, Security, Log. Agents and leases are rendered when the status carries them; until phase 2 is wired in, `AgentActing` is a stand-in that answers "not available yet".
+- **Not done**: web push from the PWA (ntfy and Pushover stay the push path), data used, "commit and push a repo", and the screen-sharing tiers of section 8 past the still screenshot.
 - Native iOS app later, only if the PWA is not enough (push reliability is the deciding factor).
 
 ### 3.5 Phase 4: agents ask for awake time (weeks 13+)

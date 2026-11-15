@@ -664,7 +664,8 @@ final class StatusItemController: NSObject {
             relaunchBrowser: #selector(menuRelaunchBrowser(_:)),
             stopWaitingForOutput: #selector(menuStopWaitingForOutput(_:)),
             checkForUpdates: #selector(menuCheckForUpdates),
-            setup: #selector(menuSetup)
+            setup: #selector(menuSetup),
+            pairPhone: #selector(menuPairPhone)
         )
         menu.popUp(positioning: nil, at: NSPoint(x: 0, y: button.bounds.height + 4), in: button)
     }
@@ -704,8 +705,16 @@ final class StatusItemController: NSObject {
             foreignSleep: manager.foreignSleepWarning,
             outputsWaiting: manager.outputsWaitingForRestore,
             lidSimulationBuild: LidSimulationBuild.isCompiledIn,
-            leases: manager.leases?.menuLines(now: Date()) ?? []
+            leases: manager.leases?.menuLines(now: Date()) ?? [],
+            phone: manager.services?.phone?.menuLine
         )
+    }
+
+    /// "Pair phone…": opens a pairing window and Settings, which shows
+    /// the code and its QR code in the Phone app section.
+    @objc private func menuPairPhone() {
+        manager.services?.phone?.auth.beginPairing()
+        menuOpenSettings()
     }
 
     @objc private func menuStopWaitingForOutput(_ sender: NSMenuItem) {

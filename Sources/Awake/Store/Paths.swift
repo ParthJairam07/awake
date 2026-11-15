@@ -108,6 +108,9 @@ struct Paths: Sendable, Equatable {
     /// What the lease manager has to remember across a relaunch: which
     /// session the leases started or stretched, and which it announced.
     var leaseStateFile: URL { appSupport.appendingPathComponent("lease-state.json") }
+    /// What every paired phone asked the Mac to do (phase 3). Owner-only,
+    /// rotated to `audit.log.1` past `PhoneAuditLog.maxBytes`.
+    var auditLog: URL { appSupport.appendingPathComponent("audit.log") }
 
     /// Both logs are owner-only and rotate to `<name>.1` past
     /// `OwnerOnly.maxLogBytes`; uninstall.sh --purge removes the `.1` too.

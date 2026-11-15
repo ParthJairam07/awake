@@ -19,6 +19,19 @@ let package = Package(
                 .product(name: "Sparkle", package: "Sparkle"),
             ],
             path: "Sources/Awake",
+            // The phone web app (phase 3). Embedded in the executable, so
+            // the app bundle stays one binary with no resource bundle to
+            // copy or seal.
+            resources: [
+                .embedInCode("Phone/Web/index.html"),
+                .embedInCode("Phone/Web/app.js"),
+                .embedInCode("Phone/Web/app.css"),
+                .embedInCode("Phone/Web/manifest.webmanifest"),
+                .embedInCode("Phone/Web/sw.js"),
+                .embedInCode("Phone/Web/icon-180.png"),
+                .embedInCode("Phone/Web/icon-192.png"),
+                .embedInCode("Phone/Web/icon-512.png"),
+            ],
             swiftSettings: [
                 .swiftLanguageMode(.v6),
             ],

@@ -737,6 +737,34 @@ final class AppServices {
     /// The leases for `snapshot`, from the lease manager. Set by
     /// `SessionManager.live()`.
     var leaseStatuses: (@MainActor (Date) -> [LeaseStatus])?
+
+    // MARK: Phase 3
+
+    /// The phone app (PWA + API over Tailscale). Created at launch by
+    /// `startPhoneApp`, whether or not a session runs: the phone starts
+    /// sessions too. nil in tests and until the app has launched.
+    private(set) var phone: PhoneAppController?
+
+    /// Creates the phone app for `manager` and starts it if the setting is
+    /// on. Called once, when the app has launched.
+    func startPhoneApp(for manager: SessionManager) {
+        guard phone == nil else { return }
+        let controller = PhoneAppController(
+            paths: paths,
+            session: LivePhoneSession(manager: manager, services: self),
+            locker: locker,
+            machine: LivePhoneMachine(services: self),
+            refreshStatus: { [weak self] in self?.refreshInstant() }
+        )
+        phone = controller
+        controller.apply(manager.config)
+    }
+
+    /// The Wi-Fi name for the phone's Machine tab; the menu reads it the
+    /// same way when it opens.
+    func refreshSSIDForPhone() async {
+        status.wifiSSID = await currentSSID()
+    }
 }
 
 extension BrightnessSampler {
