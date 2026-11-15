@@ -43,9 +43,10 @@ final class LeaseManagerTests: XCTestCase {
         owner: String = "claude",
         reason: String = "refactor billing",
         until: LeaseUntil? = nil,
-        grace: Int = 0
+        grace: Int = 0,
+        createdAt: Date? = nil
     ) throws -> Lease {
-        let lease = Lease(owner: owner, reason: reason, createdAt: now, expiresAt: now.addingTimeInterval(duration), until: until, graceSeconds: grace, source: .cli)
+        let lease = Lease(owner: owner, reason: reason, createdAt: createdAt ?? now, expiresAt: now.addingTimeInterval(duration), until: until, graceSeconds: grace, source: .cli)
         try store.write(lease)
         return lease
     }
@@ -675,7 +676,9 @@ final class LeaseManagerTests: XCTestCase {
     func testLeasesAreListedInTheMenuAndTheStatusSnapshot() async throws {
         let m = h.makeManager()
         let leases = makeLeases(for: m)
-        try grant(72 * 60, reason: "refactor billing")
+        // Made a second apart: leases are held oldest first, and two made
+        // in the same instant would be ordered by their random ids.
+        try grant(72 * 60, reason: "refactor billing", createdAt: now.addingTimeInterval(-1))
         try grant(30 * 60, owner: "codex", reason: "")
         await leases.sync()
 
