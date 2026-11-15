@@ -425,6 +425,8 @@ final class SessionManager {
     /// `Config.preEndHooks` is on (`PreEndRunner`). Set by AppServices for
     /// the running session.
     @ObservationIgnored var preEnd: (@MainActor (EndReason) async -> Void)?
+    /// The deadline timer is inside its pre-end save.
+    @ObservationIgnored private var deadlinePreEndRunning = false
     /// Called with each brightness level known to be the user's: a value
     /// written from the journal, and the reading that finds a kept value
     /// set since. `AppServices` gives it to the sampler, which does not
@@ -3121,7 +3123,15 @@ final class SessionManager {
             return
         }
         if config.preEndHooks, preEnd != nil {
-            await runPreEnd(.timer)
+            // The leases move a session that is past its end to "now",
+            // which arms this timer again while the save still runs. That
+            // fire has nothing to do: the one that is saving ends it.
+            guard !deadlinePreEndRunning else { return }
+            deadlinePreEndRunning = true
+            // With the reason the end below will have, so "Session ending"
+            // and pre-end.json say the leases were released when they were.
+            await runPreEnd(leases?.timerEndReason ?? .timer)
+            deadlinePreEndRunning = false
             // The save takes time. A session ended meanwhile is gone, and
             // one extended meanwhile has a new deadline and its own timer.
             guard let current = session, current.endsAt.timeIntervalSince(clock()) <= 0 else { return }
