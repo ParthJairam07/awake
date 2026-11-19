@@ -584,7 +584,27 @@ jobs:
           name: ${{ needs.build.outputs.package }}
           path: release
 
+      - name: See whether this repository can store attestations
+        # GitHub refuses to store an attestation for a private repository
+        # owned by a user account ("Feature not available for user-owned
+        # private repositories"). There the nightly is published without
+        # one and its notes say so; once the repository is public every
+        # nightly is attested again. A stable release is never published
+        # without its attestation.
+        id: attest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          unavailable="$(gh api "repos/$GITHUB_REPOSITORY" --jq '.private and .owner.type == "User"')"
+          if [[ "$unavailable" == true ]]; then
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GITHUB_REPOSITORY is a private repository owned by a user account, where GitHub does not store attestations: this nightly is published without one."
+          else
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Attest build provenance
+        if: steps.attest.outputs.available == 'true'
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-path: |
@@ -592,6 +612,8 @@ jobs:
             release/*.dmg
 
       - name: Write the release notes
+        env:
+          ATTESTED: ${{ steps.attest.outputs.available }}
         run: |
           zip="$(basename release/*.zip)"
           dmg="$(basename release/*.dmg)"
@@ -612,8 +634,14 @@ jobs:
               signing="**Unsigned build: right-click → Open on first launch.** This build is ad-hoc signed and not notarized, because no Developer ID certificate was available when it was built. If right-click → Open is refused too, allow it once in System Settings > Privacy & Security (Open Anyway)."
               ;;
           esac
-          origin="The checksums and the attestation below show these files are what the Release workflow built from that commit of main."
-          install_note="The installer checks the bundle's signature, identifier and version before asking for your password, but it cannot verify where this bundle came from: that is what the checksum and the attestation above are for, and \`--allow-unverified-origin\` says you checked them. It then installs the app, the recovery agent and the sudoers rule described in the README."
+          if [[ "$ATTESTED" == true ]]; then
+            origin="The checksums and the attestation below show these files are what the Release workflow built from that commit of main."
+            proof="the checksum and the attestation above are"
+          else
+            origin="**No attestation:** GitHub does not store attestations for a private repository owned by a user account, so this build has none. The checksums below show the files are the ones this release was published with, not who built them."
+            proof="the checksum above is"
+          fi
+          install_note="The installer checks the bundle's signature, identifier and version before asking for your password, but it cannot verify where this bundle came from: that is what $proof for, and \`--allow-unverified-origin\` says you checked them. It then installs the app, the recovery agent and the sudoers rule described in the README."
           {
             echo "Awake $VERSION for Apple Silicon Macs with macOS 26 or later. The app is built for arm64 only, so the installer stops on an Intel Mac."
             echo
@@ -629,11 +657,15 @@ jobs:
             echo
             echo '```bash'
             echo "shasum -a 256 -c SHA256SUMS --ignore-missing"
-            echo "gh attestation verify $zip -R $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml --source-ref $GITHUB_REF --source-digest $GITHUB_SHA"
+            if [[ "$ATTESTED" == true ]]; then
+              echo "gh attestation verify $zip -R $GITHUB_REPOSITORY --signer-workflow $GITHUB_REPOSITORY/.github/workflows/release.yml --source-ref $GITHUB_REF --source-digest $GITHUB_SHA"
+            fi
             echo '```'
             echo
-            echo "The second command checks that this zip is the subject of an attestation signed by this repository's Release workflow for \`$GITHUB_REF\` at commit \`$GITHUB_SHA\`, not by just any workflow of this repository, and not for a stable tag."
-            echo
+            if [[ "$ATTESTED" == true ]]; then
+              echo "The second command checks that this zip is the subject of an attestation signed by this repository's Release workflow for \`$GITHUB_REF\` at commit \`$GITHUB_SHA\`, not by just any workflow of this repository, and not for a stable tag."
+              echo
+            fi
             echo "SHA-256 of \`$zip\`: \`$sum\`"
             echo
             echo "SHA-256 of \`$dmg\`: \`$dmg_sum\`"
