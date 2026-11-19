@@ -131,10 +131,9 @@ struct OnboardingView: View {
             HStack {
                 Button("Allow notifications") {
                     (manager.phoneAlerts?.local as? Notifier)?.requestAuthorizationIfNeeded()
-                    Task {
-                        try? await Task.sleep(for: .seconds(1))
-                        await refresh()
-                    }
+                    // The prompt is answered whenever the person gets to
+                    // it: follow the reading until macOS has an answer.
+                    Task { probes.notifications = await probe.notificationsOnceDecided() }
                 }
                 .disabled(probes.notifications == .yes)
                 Button("Open Notification settings") { NSWorkspace.shared.open(OnboardingModel.notificationsPane) }

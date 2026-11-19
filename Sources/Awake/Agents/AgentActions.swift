@@ -1,3 +1,4 @@
+import AwakeLeaseKit
 import Foundation
 
 /// Typing into a tmux pane, for the phone's Nudge and Answer. Apart from
@@ -52,6 +53,84 @@ struct LiveTmuxTyper: TmuxTyping {
     }
 }
 
+/// The process group a process is in and the one that holds its terminal.
+struct ProcessGroups: Sendable, Equatable {
+    let group: Int32
+    let foreground: Int32
+}
+
+/// Which of some processes is in front of its terminal. Read-only.
+protocol PaneFrontReading: Sendable {
+    /// The groups of each of `pids` that is alive; nil when they could not
+    /// be read.
+    func groups(of pids: [Int32]) async -> [Int32: ProcessGroups]?
+}
+
+/// `ps -o pid=,pgid=,tpgid= -p <pids>`.
+struct LivePaneFront: PaneFrontReading {
+    static let ps = "/bin/ps"
+
+    func groups(of pids: [Int32]) async -> [Int32: ProcessGroups]? {
+        guard !pids.isEmpty else { return [:] }
+        let list = pids.map(String.init).joined(separator: ",")
+        // ps exits 1 when none of the pids is alive: that is an answer.
+        guard let r = try? await Shell.run(Self.ps, ["-o", "pid=,pgid=,tpgid=", "-p", list]) else { return nil }
+        guard r.status == 0 || (r.status == 1 && r.stdout.allSatisfy(\.isWhitespace)) else { return nil }
+        return PaneFront.parse(r.stdout)
+    }
+}
+
+/// Who a marked pane's keys would reach, and which process a Stop is for.
+enum PaneFront {
+    static func parse(_ ps: String) -> [Int32: ProcessGroups] {
+        var out: [Int32: ProcessGroups] = [:]
+        for line in ps.split(whereSeparator: \.isNewline) {
+            let f = line.split(whereSeparator: { $0 == " " || $0 == "\t" }).compactMap { Int32($0) }
+            guard f.count == 3 else { continue }
+            out[f[0]] = ProcessGroups(group: f[1], foreground: f[2])
+        }
+        return out
+    }
+
+    private static func isShell(_ command: String) -> Bool {
+        LeaseTmux.shells.contains(command.hasPrefix("-") ? String(command.dropFirst()) : command)
+    }
+
+    /// True when the pane's own shell holds the terminal while the agent's
+    /// processes are a job of that shell that is stopped or in the
+    /// background. A SIGSTOP does that to a program started from an
+    /// interactive shell: the shell reports it suspended and takes the
+    /// terminal back, and after SIGCONT the program is a background job. Keys
+    /// sent to the pane are then read by the shell, which runs them as a
+    /// command.
+    static func shellInFront(pane: TmuxPane, agentPids: [Int32], groups: [Int32: ProcessGroups]) -> Bool {
+        guard let root = groups[pane.pid], root.foreground == root.group, isShell(pane.currentCommand) else { return false }
+        return agentPids.contains { pid in
+            guard pid != pane.pid, let g = groups[pid] else { return false }
+            return g.group != root.group
+        }
+    }
+
+    /// The process a Stop of a pane-rooted agent is for. The pane's first
+    /// process is usually an interactive shell, which ignores SIGTERM: the
+    /// agent is the job running in it. That is the leader of the group in
+    /// front of the pane when the agent tracks it, or the shell's only job
+    /// when the shell itself is in front; nil means the pane's first
+    /// process, as for any other agent.
+    static func jobToStop(pane: TmuxPane, agentPids: [Int32], groups: [Int32: ProcessGroups]) -> Int32? {
+        guard let root = groups[pane.pid] else { return nil }
+        if root.foreground != root.group {
+            return agentPids.contains(root.foreground) && root.foreground != pane.pid ? root.foreground : nil
+        }
+        guard isShell(pane.currentCommand) else { return nil }
+        let leaders = agentPids.filter { pid in
+            guard pid != pane.pid, let g = groups[pid] else { return false }
+            return g.group == pid && g.group != root.group
+        }
+        return leaders.count == 1 ? leaders[0] : nil
+    }
+}
+
 /// What the phone may do to an agent (phase 3's `AgentActing`), built from
 /// the phase-2 pieces: the tracker's records, tmux, and the priority
 /// pause's journaled stops. Nothing here runs sudo, and nothing is sent to
@@ -61,6 +140,10 @@ final class AgentActions: AgentActing {
     static let noSuchAgent = "no such agent"
     static let notInMarkedPane = "agent is not in a marked tmux pane"
     static let noSession = "no session is running"
+    static let frontUnreadable = "could not check which program is in front of the pane; nothing was typed"
+    static func notInFront(_ label: String) -> String {
+        "\(label) is not in front of its pane: the pane's shell is, and it would run what is typed. Bring the agent back with fg in that pane; nothing was typed"
+    }
     static let maxAnswerLength = 500
 
     private weak var manager: SessionManager?
@@ -68,6 +151,7 @@ final class AgentActions: AgentActing {
     private let tmux: any TmuxReading
     private let typer: any TmuxTyping
     private let control: any ProcessSignaling
+    private let front: any PaneFrontReading
     /// The tracker's records; nil once the tracker is gone.
     private let records: @MainActor () -> [AgentRecord]?
 
@@ -77,8 +161,10 @@ final class AgentActions: AgentActing {
         tmux: any TmuxReading,
         typer: any TmuxTyping,
         control: any ProcessSignaling,
+        front: any PaneFrontReading = LivePaneFront(),
         records: @escaping @MainActor () -> [AgentRecord]?
     ) {
+        self.front = front
         self.manager = manager
         self.pauser = pauser
         self.tmux = tmux
@@ -101,11 +187,18 @@ final class AgentActions: AgentActing {
     /// The agent's pane, only when tmux says right now that it is marked.
     /// The record keeps the pane of any agent that runs in tmux; keys go
     /// only where the user asked for them with the mark.
-    private func markedPane(of agent: AgentRecord) async -> String? {
+    private func markedPane(of agent: AgentRecord) async -> TmuxPane? {
         guard let paneId = agent.tmuxPaneId else { return nil }
         let panes = await tmux.panes()
-        guard panes.contains(where: { $0.id == paneId && $0.marked && !$0.dead }) else { return nil }
-        return paneId
+        return panes.first { $0.id == paneId && $0.marked && !$0.dead }
+    }
+
+    /// Why keys must not go to the agent's pane right now, or nil.
+    private func refusalToType(to agent: AgentRecord, in pane: TmuxPane) async -> String? {
+        guard let groups = await front.groups(of: [pane.pid] + agent.pids.filter { $0 != pane.pid }) else {
+            return Self.frontUnreadable
+        }
+        return PaneFront.shellInFront(pane: pane, agentPids: agent.pids, groups: groups) ? Self.notInFront(agent.label) : nil
     }
 
     func nudge(id: String) async -> PhoneActionResult {
@@ -114,7 +207,12 @@ final class AgentActions: AgentActing {
         case let .failure(why): return .failed(why.message)
         case let .success(found): agent = found
         }
-        guard let paneId = await markedPane(of: agent) else { return .failed(Self.notInMarkedPane) }
+        guard let pane = await markedPane(of: agent) else { return .failed(Self.notInMarkedPane) }
+        let paneId = pane.id
+        if let why = await refusalToType(to: agent, in: pane) {
+            Log.error("phone: nudge of \(agent.label) not sent: \(why)")
+            return .failed(why)
+        }
         if let why = await typer.enter(paneId: paneId) {
             Log.error("phone: nudge of \(agent.label) not sent: \(why)")
             return .failed(why)
@@ -141,7 +239,12 @@ final class AgentActions: AgentActing {
         case let .success(found): agent = found
         }
         if let why = Self.refusal(ofAnswer: text) { return .failed(why) }
-        guard let paneId = await markedPane(of: agent) else { return .failed(Self.notInMarkedPane) }
+        guard let pane = await markedPane(of: agent) else { return .failed(Self.notInMarkedPane) }
+        let paneId = pane.id
+        if let why = await refusalToType(to: agent, in: pane) {
+            Log.error("phone: answer to \(agent.label) not sent: \(why)")
+            return .failed(why)
+        }
         if let why = await typer.type(paneId: paneId, text: text) {
             Log.error("phone: answer to \(agent.label) not sent: \(why)")
             return .failed(why)
@@ -182,13 +285,25 @@ final class AgentActions: AgentActing {
         case let .failure(why): return .failed(why.message)
         case let .success(found): agent = found
         }
-        guard let root = agent.rootPid, let identity = agent.identities[root] ?? agent.identity else {
+        guard let first = agent.rootPid, let firstIdentity = agent.identities[first] ?? agent.identity else {
             return .failed("\(agent.label) is known only from hooks; there is no process to stop")
         }
         if agent.state == .exited { return .failed("\(agent.label) has exited") }
         // A stopped process acts on SIGTERM only once it runs again.
         if let pauser, pauser.isPaused(id), let why = await pauser.release(id: id) {
             return .failed("\(agent.label) is paused and could not be resumed to stop it: \(why)")
+        }
+        // A marked pane's first process is usually its shell; the agent is
+        // the job running in it.
+        var root = first
+        var identity = firstIdentity
+        if let paneId = agent.tmuxPaneId,
+           let pane = await tmux.panes().first(where: { $0.id == paneId && !$0.dead }), pane.pid == first,
+           let groups = await front.groups(of: agent.pids),
+           let job = PaneFront.jobToStop(pane: pane, agentPids: agent.pids, groups: groups),
+           let jobIdentity = agent.identities[job] {
+            root = job
+            identity = jobIdentity
         }
         switch control.terminate(FrozenProcess(pid: root, identity: identity)) {
         case .sent:

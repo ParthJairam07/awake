@@ -97,6 +97,15 @@ final class PhoneWebAssetTests: XCTestCase {
         XCTAssertTrue(js.contains("'/api/agents/' + encodeURIComponent(agent.id) + '/'"))
     }
 
+    /// The phone's Nudge presses Enter in the agent's pane
+    /// (`AgentActions.nudge`); "continue" is the network nudge's text, not
+    /// this one's, and the confirmation must say what will be sent.
+    func testTheNudgeConfirmationSaysWhatNudgeSends() {
+        let js = text(.script)
+        XCTAssertTrue(js.contains("title: 'Nudge ' + name + '?', body: 'Presses Enter in the agent\\'s tmux pane.'"))
+        XCTAssertFalse(js.contains("Types \"continue\""))
+    }
+
     func testTheManifestIsAStandaloneApp() throws {
         let object = try XCTUnwrap(JSONSerialization.jsonObject(with: PhoneWebAsset.manifest.data) as? [String: Any])
         XCTAssertEqual(object["name"] as? String, "Awake")
