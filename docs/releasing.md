@@ -183,6 +183,12 @@ The zip and the disk image carry a GitHub build provenance attestation that
 names the repository, the ref, the commit and the workflow run that
 produced them.
 
+GitHub does not store attestations for a private repository owned by a
+user account. While this repository is one, a nightly is published without
+an attestation and its release notes say so; the workflow attests again on
+its own once the repository is public. A stable release is never published
+without its attestation: there the run fails at the attestation step.
+
 The binary is arm64 only, because the build job runs on an Apple Silicon
 runner and no universal build is made. A release therefore runs on Apple
 Silicon Macs only: the release notes and the README say so, and
