@@ -57,8 +57,24 @@ final class AgentActionsTests: XCTestCase {
         AgentRecord(id: "hook-s1", kind: .hookOnly, name: "claude", rootPid: nil, identity: nil, firstSeen: t0, lastSeen: t0, machine: AgentStateMachine(firstSeen: t0))
     }
 
+    /// What `ps` would say about process groups; empty means every
+    /// process is unknown to it, which reads as "the agent is in front".
+    private final class FakePaneFront: PaneFrontReading, @unchecked Sendable {
+        private let lock = NSLock()
+        private var _groups: [Int32: ProcessGroups]? = [:]
+        var table: [Int32: ProcessGroups]? {
+            get { lock.withLock { _groups } }
+            set { lock.withLock { _groups = newValue } }
+        }
+        func groups(of pids: [Int32]) async -> [Int32: ProcessGroups]? {
+            guard let table else { return nil }
+            return table.filter { pids.contains($0.key) }
+        }
+    }
+
     @MainActor
     private final class Fixture {
+        let front = FakePaneFront()
         let h = Harness()
         let tmux = FakeTmux()
         let typer = FakeTmuxTyper()
@@ -78,7 +94,7 @@ final class AgentActionsTests: XCTestCase {
         let freezer = FakeFreezer(apps: [], processes: [], control: f.h.procs)
         f.manager = m
         f.pauser = AgentPauser(manager: m, freezer: freezer, notifier: f.h.notifier, clock: { clock.now }, stepInterval: 60) { [f] in f.records ?? [] }
-        f.actions = AgentActions(manager: m, pauser: f.pauser, tmux: f.tmux, typer: f.typer, control: f.h.procs) { [f] in f.records }
+        f.actions = AgentActions(manager: m, pauser: f.pauser, tmux: f.tmux, typer: f.typer, control: f.h.procs, front: f.front) { [f] in f.records }
         return f
     }
 
@@ -294,6 +310,114 @@ final class AgentActionsTests: XCTestCase {
         let result = await f.actions.stop(id: "codex-20")
         XCTAssertEqual(result, .done("Asked codex to stop (SIGTERM to pid 20)."))
         XCTAssertEqual(f.h.procs.terminated, [20])
+    }
+
+    // MARK: who is in front of the pane
+
+    /// A pane whose shell (pid 5) started the agent (pid 10) as a job.
+    private func shellPane(_ id: String = "%1") -> TmuxPane {
+        TmuxPane(id: id, target: "work:0.0", pid: 5, marked: true, currentCommand: "zsh")
+    }
+
+    func testPsOutputIsReadAsGroups() {
+        let table = PaneFront.parse("  5     5    10\n   10    10    10\njunk line\n 11 10\n")
+        XCTAssertEqual(table, [5: ProcessGroups(group: 5, foreground: 10), 10: ProcessGroups(group: 10, foreground: 10)])
+    }
+
+    /// After SIGSTOP and SIGCONT an agent started from an interactive shell
+    /// is a background job, and the shell reads the pane's keys. Seen on a
+    /// real Mac: the phone's answer ran as a shell command.
+    func testNothingIsTypedWhileThePanesShellIsInFrontOfTheAgent() async {
+        let f = await fixture([agent(.claude, pid: 10, children: [11], pane: "%1")], panes: [shellPane()])
+        defer { f.h.home.destroy() }
+        f.front.table = [5: ProcessGroups(group: 5, foreground: 5), 10: ProcessGroups(group: 10, foreground: 5), 11: ProcessGroups(group: 10, foreground: 5)]
+        let refusal = AgentActions.notInFront("claude")
+        let answered = await f.actions.answer(id: "claude-10", text: "rm -rf x")
+        XCTAssertEqual(answered, .failed(refusal))
+        let nudged = await f.actions.nudge(id: "claude-10")
+        XCTAssertEqual(nudged, .failed(refusal))
+        XCTAssertTrue(f.typer.sent.isEmpty)
+
+        // The agent in front again (fg): keys go through.
+        f.front.table = [5: ProcessGroups(group: 5, foreground: 10), 10: ProcessGroups(group: 10, foreground: 10), 11: ProcessGroups(group: 10, foreground: 10)]
+        let again = await f.actions.answer(id: "claude-10", text: "y")
+        XCTAssertTrue(again.ok)
+        XCTAssertEqual(f.typer.sent, ["type %1 y"])
+    }
+
+    func testNothingIsTypedWhenTheFrontOfThePaneCannotBeRead() async {
+        let f = await fixture([agent(.claude, pid: 10, pane: "%1")], panes: [shellPane()])
+        defer { f.h.home.destroy() }
+        f.front.table = nil
+        let answered = await f.actions.answer(id: "claude-10", text: "y")
+        XCTAssertEqual(answered, .failed(AgentActions.frontUnreadable))
+        let nudged = await f.actions.nudge(id: "claude-10")
+        XCTAssertEqual(nudged, .failed(AgentActions.frontUnreadable))
+        XCTAssertTrue(f.typer.sent.isEmpty)
+    }
+
+    func testAShellInFrontIsOnlyARefusalWhenTheAgentIsAJobBehindIt() {
+        let shell = shellPane()
+        // A marked pane with nothing but its shell: the shell is the agent.
+        XCTAssertFalse(PaneFront.shellInFront(pane: shell, agentPids: [5], groups: [5: ProcessGroups(group: 5, foreground: 5)]))
+        // A script run as the pane's command (`tmux new-window 'bash build.sh'`):
+        // no job control, its children share its group.
+        let script = TmuxPane(id: "%2", target: "work:1.0", pid: 5, marked: true, currentCommand: "bash")
+        XCTAssertFalse(PaneFront.shellInFront(pane: script, agentPids: [5, 6], groups: [5: ProcessGroups(group: 5, foreground: 5), 6: ProcessGroups(group: 5, foreground: 5)]))
+        // A program that is the pane's first process, with a detached child.
+        let program = TmuxPane(id: "%3", target: "work:2.0", pid: 5, marked: true, currentCommand: "node")
+        XCTAssertFalse(PaneFront.shellInFront(pane: program, agentPids: [5, 6], groups: [5: ProcessGroups(group: 5, foreground: 5), 6: ProcessGroups(group: 6, foreground: 5)]))
+        // The agent in front of its shell.
+        XCTAssertFalse(PaneFront.shellInFront(pane: shell, agentPids: [5, 10], groups: [5: ProcessGroups(group: 5, foreground: 10), 10: ProcessGroups(group: 10, foreground: 10)]))
+        // The agent a job behind a login shell ("-zsh").
+        let login = TmuxPane(id: "%4", target: "work:3.0", pid: 5, marked: true, currentCommand: "-zsh")
+        XCTAssertTrue(PaneFront.shellInFront(pane: login, agentPids: [5, 10], groups: [5: ProcessGroups(group: 5, foreground: 5), 10: ProcessGroups(group: 10, foreground: 5)]))
+        // The job has exited: only the shell is left.
+        XCTAssertFalse(PaneFront.shellInFront(pane: shell, agentPids: [5, 10], groups: [5: ProcessGroups(group: 5, foreground: 5)]))
+    }
+
+    /// A marked pane is tracked from its first process, an interactive
+    /// shell that ignores SIGTERM. Seen on a real Mac: Stop reported "ok"
+    /// and the agent kept running. The signal is for the job in the pane.
+    func testStopOfAMarkedPaneIsForTheJobInFrontNotThePanesShell() async {
+        let pane = shellPane()
+        let f = await fixture([agent(.tmuxPane, pid: 5, children: [10, 11], pane: "%1")], panes: [pane])
+        defer { f.h.home.destroy() }
+        f.front.table = [5: ProcessGroups(group: 5, foreground: 10), 10: ProcessGroups(group: 10, foreground: 10), 11: ProcessGroups(group: 10, foreground: 10)]
+        let result = await f.actions.stop(id: "tmux-5")
+        XCTAssertTrue(result.ok)
+        XCTAssertEqual(f.h.procs.terminated, [10])
+    }
+
+    func testStopOfAMarkedPaneFindsTheShellsOnlyJobBehindIt() async {
+        let f = await fixture([agent(.tmuxPane, pid: 5, children: [10, 11], pane: "%1")], panes: [shellPane()])
+        defer { f.h.home.destroy() }
+        f.front.table = [5: ProcessGroups(group: 5, foreground: 5), 10: ProcessGroups(group: 10, foreground: 5), 11: ProcessGroups(group: 10, foreground: 5)]
+        _ = await f.actions.stop(id: "tmux-5")
+        XCTAssertEqual(f.h.procs.terminated, [10])
+    }
+
+    func testStopFallsBackToThePanesFirstProcess() {
+        let shell = shellPane()
+        let idle = [Int32(5): ProcessGroups(group: 5, foreground: 5)]
+        XCTAssertNil(PaneFront.jobToStop(pane: shell, agentPids: [5], groups: idle), "nothing but the shell")
+        XCTAssertNil(PaneFront.jobToStop(pane: shell, agentPids: [5, 10], groups: [:]), "ps knew none of them")
+        let two = [Int32(5): ProcessGroups(group: 5, foreground: 5), 10: ProcessGroups(group: 10, foreground: 5), 12: ProcessGroups(group: 12, foreground: 5)]
+        XCTAssertNil(PaneFront.jobToStop(pane: shell, agentPids: [5, 10, 12], groups: two), "two jobs: which one is not Awake's to guess")
+        let untracked = [Int32(5): ProcessGroups(group: 5, foreground: 99)]
+        XCTAssertNil(PaneFront.jobToStop(pane: shell, agentPids: [5], groups: untracked), "the job in front is not one Awake tracks")
+        let program = TmuxPane(id: "%3", target: "work:2.0", pid: 5, marked: true, currentCommand: "node")
+        XCTAssertNil(PaneFront.jobToStop(pane: program, agentPids: [5, 6], groups: [5: ProcessGroups(group: 5, foreground: 5), 6: ProcessGroups(group: 6, foreground: 5)]), "the first process is the agent")
+    }
+
+    /// An agent found by its own process (claude under a shell) is
+    /// signalled as before, whatever the pane says.
+    func testStopOfAnAgentThatIsNotThePanesFirstProcessIsUnchanged() async {
+        let f = await fixture([agent(.claude, pid: 10, children: [11], pane: "%1")], panes: [shellPane()])
+        defer { f.h.home.destroy() }
+        f.front.table = [5: ProcessGroups(group: 5, foreground: 11), 10: ProcessGroups(group: 10, foreground: 11), 11: ProcessGroups(group: 11, foreground: 11)]
+        _ = await f.actions.stop(id: "claude-10")
+        XCTAssertEqual(f.h.procs.terminated, [10])
     }
 
     func testStopRefusals() async {

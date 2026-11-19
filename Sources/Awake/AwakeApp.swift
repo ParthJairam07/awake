@@ -96,7 +96,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         updater.start(automaticChecks: manager.config.automaticUpdates)
         statusItem?.checkForUpdates = { [updater] in updater.checkForUpdates() }
         // Step E: first-run setup, and "Setup…" in the menu to reopen it.
-        onboarding = Onboarding.wire(manager: manager, loginItem: loginItem, statusItem: statusItem)
+        onboarding = Onboarding.wire(manager: manager, loginItem: loginItem, statusItem: statusItem, appIsQuitting: { [weak self] in self?.terminating ?? false })
         Task {
             await manager.reconcile()
             // Phase 4: after the reconcile, so the leases meet the session

@@ -23,10 +23,29 @@ enum Onboarding {
         }
     }
 
-    static func wire(manager: SessionManager, loginItem: LoginItem, statusItem: StatusItemController?) -> OnboardingWindow {
+    /// Whether a closing Setup window counts as setup having been seen
+    /// through. A window that closes because the app is quitting does not:
+    /// System Settings quits Awake in the middle of setup ("Quit & Reopen"
+    /// after allowing Screen Recording), and setup has to come back after.
+    static func closingFinishesSetup(appIsQuitting: Bool) -> Bool {
+        !appIsQuitting
+    }
+
+    static func wire(
+        manager: SessionManager,
+        loginItem: LoginItem,
+        statusItem: StatusItemController?,
+        appIsQuitting: @escaping @MainActor () -> Bool = { false }
+    ) -> OnboardingWindow {
         let window = OnboardingWindow(
             content: { close in AnyView(OnboardingView(manager: manager, loginItem: loginItem, close: close)) },
-            onClose: { markDone(manager: manager) }
+            onClose: {
+                guard closingFinishesSetup(appIsQuitting: appIsQuitting()) else {
+                    Log.info("setup: window closed by quitting; setup shows again at the next launch")
+                    return
+                }
+                markDone(manager: manager)
+            }
         )
         statusItem?.showSetup = { [weak window] in window?.show() }
         if shouldShowAtLaunch(config: manager.config, sessionActive: manager.session != nil || manager.store.sessionEntryExists(), inAppBundle: Notifier.runningInsideAppBundle()) {

@@ -209,6 +209,44 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(read.sudoersRule, .no)
     }
 
+    /// "Allow notifications" puts up a macOS prompt that is answered some
+    /// time later; the step follows the reading until there is an answer
+    /// instead of reading once after a fixed second.
+    func testTheNotificationsReadingIsFollowedUntilMacOSHasAnAnswer() async {
+        let reads = Calls()
+        var probe = probe(sudo: { _ in 0 })
+        probe.notifications = {
+            reads.add(["read"])
+            return reads.all.count < 4 ? .unknown : .yes
+        }
+        let waits = Calls()
+        let reading = await probe.notificationsOnceDecided(attempts: 10, wait: { waits.add(["wait"]) })
+        XCTAssertEqual(reading, .yes)
+        XCTAssertEqual(reads.all.count, 4, "it stops reading at the first answer")
+        XCTAssertEqual(waits.all.count, 3)
+    }
+
+    func testANotificationsAnswerAlreadyThereIsReadOnceAndARefusalIsAnAnswer() async {
+        let waits = Calls()
+        var probe = probe(sudo: { _ in 0 })
+        probe.notifications = { .no }
+        let reading = await probe.notificationsOnceDecided(attempts: 10, wait: { waits.add(["wait"]) })
+        XCTAssertEqual(reading, .no)
+        XCTAssertTrue(waits.all.isEmpty)
+    }
+
+    func testAPromptNobodyAnswersStopsBeingFollowed() async {
+        let reads = Calls()
+        var probe = probe(sudo: { _ in 0 })
+        probe.notifications = {
+            reads.add(["read"])
+            return .unknown
+        }
+        let reading = await probe.notificationsOnceDecided(attempts: 5, wait: {})
+        XCTAssertEqual(reading, .unknown)
+        XCTAssertEqual(reads.all.count, 6, "one read, then one per attempt")
+    }
+
     func testTailscaleIsFoundAsTheAppOrTheCommand() {
         for path in ["/Applications/Tailscale.app", "/opt/homebrew/bin/tailscale", "/usr/local/bin/tailscale"] {
             XCTAssertEqual(OnboardingModel.tailscaleInstalled(exists: { $0 == path }), .yes, path)
@@ -236,6 +274,14 @@ final class OnboardingTests: XCTestCase {
         XCTAssertFalse(Onboarding.shouldShowAtLaunch(config: config, sessionActive: false, inAppBundle: false))
         config.onboardingDone = true
         XCTAssertFalse(Onboarding.shouldShowAtLaunch(config: config, sessionActive: false, inAppBundle: true))
+    }
+
+    /// System Settings quits Awake in the middle of setup ("Quit & Reopen"
+    /// for Screen Recording). That close is not the person finishing or
+    /// dismissing setup, so it must come back at the next launch.
+    func testAWindowClosedByQuittingDoesNotFinishSetup() {
+        XCTAssertTrue(Onboarding.closingFinishesSetup(appIsQuitting: false))
+        XCTAssertFalse(Onboarding.closingFinishesSetup(appIsQuitting: true))
     }
 
     /// "Setup…" sits after Settings… and before Check for Updates… and

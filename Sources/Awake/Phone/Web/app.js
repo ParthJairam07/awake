@@ -596,7 +596,7 @@
         });
       });
       button('Nudge', null, function () {
-        ask({ title: 'Nudge ' + name + '?', body: 'Types "continue" into the agent.', ok: 'Nudge' }).then(function (yes) {
+        ask({ title: 'Nudge ' + name + '?', body: 'Presses Enter in the agent\'s tmux pane.', ok: 'Nudge' }).then(function (yes) {
           if (yes) act('agent', 'POST', base + 'nudge');
         });
       });

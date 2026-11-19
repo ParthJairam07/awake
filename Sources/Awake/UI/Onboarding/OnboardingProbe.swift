@@ -38,6 +38,24 @@ struct OnboardingProbe: Sendable {
 
     /// Everything at once. `config` supplies the phone settings; the test
     /// result is the window's own state.
+    /// The notifications reading once macOS has an answer. After "Allow
+    /// notifications" the system prompt stays up until someone answers it,
+    /// and the reading is unknown until then: read again after each `wait`
+    /// while it is, at most `attempts` times.
+    func notificationsOnceDecided(
+        attempts: Int = 120,
+        wait: @Sendable () async -> Void = { try? await Task.sleep(for: .seconds(1)) }
+    ) async -> OnboardingReading {
+        var reading = await notifications()
+        var left = attempts
+        while reading == .unknown, left > 0, !Task.isCancelled {
+            await wait()
+            reading = await notifications()
+            left -= 1
+        }
+        return reading
+    }
+
     func read(config: Config, phoneTestSucceeded: Bool) async -> OnboardingProbes {
         let services = PhonePush.servicesEnabled(config: config)
         return OnboardingProbes(

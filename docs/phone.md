@@ -56,11 +56,13 @@ What the Agents tab can do to an agent, while a session runs: **Nudge**
 sends Enter to its tmux pane and **Answer** types one line (up to 500
 characters, no control characters) followed by Enter, both only into a
 pane you marked (`tmux set-option -p @awake 1` or an `awake:` title) that
-is alive and not in copy mode. **Pause** stops the agent's processes
+is alive and not in copy mode, and not while the pane's shell is in front
+of the agent (after a pause; see agents.md). **Pause** stops the agent's processes
 (SIGSTOP) and **Resume** continues them (SIGCONT), through the same
 journal as the priority pause, so the session's end, a lid open, the
 recovery agent or the next launch resumes a paused agent if you do not.
-**Stop** sends SIGTERM to the agent's main process only, never SIGKILL,
+**Stop** sends SIGTERM to the agent's main process only (for a marked
+pane, the job running in it rather than the pane's shell), never SIGKILL,
 and only if it is still the process Awake has been tracking. An agent
 known only from hooks has no process and no pane, so it can only be
 watched; an agent with `sudo` under it is not paused. Nothing here runs

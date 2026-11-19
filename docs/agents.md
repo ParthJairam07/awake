@@ -205,7 +205,9 @@ With the [phone app](phone.md) on, the Agents tab can act on an agent
 while a session runs. Nudge (Enter) and Answer (one line of at most 500
 characters, typed literally, then Enter) go to the agent's tmux pane and
 only if that pane is marked, alive and not in copy mode; anything else is
-refused with "agent is not in a marked tmux pane". Pause and Resume use
+refused with "agent is not in a marked tmux pane". They are also refused
+while the pane's own shell is in front of the agent (see the note on Pause
+below), because the shell would run what is typed. Pause and Resume use
 the priority pause's stops: journaled before the signal, tied to each
 process's start time, never an agent with `sudo` under it, and undone by
 the session's end, a lid open, the recovery agent or the next launch. An
@@ -214,9 +216,22 @@ priority pause stopped can be resumed from the phone and is paused again
 if the pressure is still there. Stop sends SIGTERM to the agent's root
 process only, after checking that the pid is still the process Awake
 tracked (a paused agent is resumed first, so it can act on the signal);
-it is refused for an agent known only from hooks. The phone API records
+it is refused for an agent known only from hooks. For a marked pane, whose
+first process is usually an interactive shell that ignores SIGTERM, the
+signal goes to the job running in the pane instead: the process leading
+the group in front of the pane, or the shell's only job when the shell
+itself is in front. The phone API records
 every action in the audit log, with the length of an answer, never its
 text.
+
+A pause is a SIGSTOP, and an interactive shell notices when a program it
+started is stopped: it prints "suspended", takes the terminal back, and
+after the resume the program is a background job of that shell (an agent
+that reads the terminal then stops again until someone types `fg` in the
+pane). tmux also continues a pane's first process when it is stopped. So
+pausing an agent that was started from a shell prompt, in tmux or not,
+leaves it for a person to bring back with `fg`. Until then Nudge and Answer
+are refused for it.
 
 ## Hooks
 
