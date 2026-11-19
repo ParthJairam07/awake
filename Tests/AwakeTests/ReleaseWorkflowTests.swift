@@ -281,6 +281,40 @@ final class ReleaseWorkflowTests: XCTestCase {
         XCTAssertEqual(r.calls, [post, get], "a tag that cannot be read stops the job before any release")
     }
 
+    /// GitHub stores no attestation for a private repository owned by a
+    /// user account. There the nightly skips the attestation step and its
+    /// notes say so, instead of failing; anywhere else it attests. A stable
+    /// release has no such way out.
+    func testTheNightlySkipsTheAttestationOnlyWhereGitHubCannotStoreOne() throws {
+        let script = try stepScript("nightly", "See whether this repository can store attestations")
+        let call = #"api repos/ParthJairam07/awake --jq .private and .owner.type == "User""#
+        let stub = """
+            case "$1 $2" in
+              "api repos/ParthJairam07/awake") exec /bin/cat "$here/unavailable" ;;
+            esac
+            """
+        var r = try runStep(script, gh: stub, files: ["unavailable": "true\n"], environment: [:])
+        XCTAssertEqual(r.status, 0, r.stderr)
+        XCTAssertEqual(r.calls, [call])
+        XCTAssertEqual(r.output, "available=false\n", "a private repository of a user account: no attestation")
+
+        r = try runStep(script, gh: stub, files: ["unavailable": "false\n"], environment: [:])
+        XCTAssertEqual(r.status, 0, r.stderr)
+        XCTAssertEqual(r.output, "available=true\n", "any other repository attests")
+
+        r = try runStep(script, gh: "", files: [:], environment: [:])
+        XCTAssertNotEqual(r.status, 0, "a repository that cannot be read stops the job")
+        XCTAssertEqual(r.output, "")
+
+        let nightly = try job("nightly").joined(separator: "\n")
+        XCTAssertTrue(nightly.contains("      - name: Attest build provenance\n        if: steps.attest.outputs.available == 'true'\n        uses: actions/attest-build-provenance@"), "the attestation step runs only where it can be stored")
+        XCTAssertTrue(nightly.contains("        env:\n          ATTESTED: ${{ steps.attest.outputs.available }}\n"), "the notes know whether the build was attested")
+        XCTAssertTrue(nightly.contains(#"origin="**No attestation:**"#), "the notes of an unattested nightly say so")
+        let stable = try job("stable").joined(separator: "\n")
+        XCTAssertFalse(stable.contains("steps.attest.outputs.available"), "a stable release is always attested")
+        XCTAssertTrue(stable.contains("      - name: Attest build provenance\n        uses: actions/attest-build-provenance@"), "a stable release is always attested")
+    }
+
     /// The `run: |` block of the job's step with this name, unindented.
     private func stepScript(_ id: String, _ step: String) throws -> String {
         let body = try job(id)
