@@ -1326,6 +1326,7 @@ final class SessionManager {
             return
         }
         session = updated
+        noteReport { $0.plannedEnd = updated.endsAt }
         lastError = nil
         Log.info("session extended by \(Int(extra))s until \(iso(updated.endsAt))")
         await armDeadline(updated.endsAt)
@@ -1380,6 +1381,7 @@ final class SessionManager {
             return nil
         }
         session = updated
+        noteReport { $0.plannedEnd = updated.endsAt }
         Log.info("session end moved by leases from \(iso(current.endsAt)) to \(iso(end))")
         await armDeadline(end)
         return end
@@ -1645,6 +1647,13 @@ final class SessionManager {
         }
         guard session == nil else { return }
         var r = left
+        // This process did not see the session end, so the launch time is
+        // not its end. Only a passed deadline ends a session without the
+        // app (the recovery agent acts on it within its one-minute poll),
+        // so the session ran until its deadline. A leftover whose deadline
+        // is still ahead was ended early by a forced recovery run, whose
+        // time is not recorded: the launch time is the closest known.
+        if r.endedAt == nil { r.endedAt = max(r.startedAt, min(clock(), r.plannedEnd)) }
         r.summaryPosted = true
         if config.sessionSummary {
             notifier.post(title: SessionReport.title, body: r.summary(now: clock(), endReasonText: Self.reasonText))

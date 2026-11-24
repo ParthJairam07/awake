@@ -82,4 +82,64 @@ final class SessionReportManagerTests: XCTestCase {
         XCTAssertTrue(summary?.body.contains("2 outages, 6m 40s in all") ?? false, summary?.body ?? "")
         XCTAssertNil(h.store.loadReport())
     }
+
+    /// The recovery agent ended a 3-minute session; Awake is opened 39 s
+    /// later. The summary used to say "Ran 3m 39s": it counted up to the
+    /// launch. The session ran until its deadline.
+    func testALeftoverReportRunsUntilTheDeadlineNotTheLaunch() async throws {
+        let start = h.clock.now.addingTimeInterval(-219)
+        try h.store.saveReport(SessionReport(startedAt: start, plannedEnd: start.addingTimeInterval(180), batteryStart: nil))
+        let m = h.makeManager()
+        await m.reconcile()
+        let summary = h.notifier.posts.last { $0.title == SessionReport.title }
+        XCTAssertEqual(summary?.body, "Ran 3m (Awake was not running when it ended).")
+    }
+
+    /// The same when the launch itself finds the expired session and ends
+    /// it: nobody was holding the Mac awake after the deadline.
+    func testAnExpiredSessionFoundAtLaunchRunsUntilItsDeadline() async throws {
+        let first = h.makeManager()
+        await first.start(duration: 180)
+        XCTAssertNotNil(h.store.loadReport())
+        h.clock.advance(219)
+        let next = h.makeManager()
+        await next.reconcile()
+        XCTAssertFalse(next.isActive)
+        let summary = h.notifier.posts.last { $0.title == SessionReport.title }
+        XCTAssertTrue(summary?.body.hasPrefix("Ran 3m (Awake was not running when it ended).") ?? false, summary?.body ?? "")
+    }
+
+    /// An extension moves the deadline the summary counts to.
+    func testAnExtendedSessionRunsUntilItsNewDeadline() async throws {
+        let first = h.makeManager()
+        await first.start(duration: 180)
+        await first.extend(by: 120)
+        XCTAssertEqual(h.store.loadReport()?.plannedEnd, first.session?.endsAt)
+        h.clock.advance(3600)
+        let next = h.makeManager()
+        await next.reconcile()
+        let summary = h.notifier.posts.last { $0.title == SessionReport.title }
+        XCTAssertTrue(summary?.body.hasPrefix("Ran 5m (Awake was not running when it ended).") ?? false, summary?.body ?? "")
+    }
+
+    /// A leftover whose deadline is still ahead (a forced recovery run):
+    /// never counted past the launch.
+    func testALeftoverReportEndedEarlyIsNotCountedToItsDeadline() async throws {
+        let start = h.clock.now.addingTimeInterval(-60)
+        try h.store.saveReport(SessionReport(startedAt: start, plannedEnd: start.addingTimeInterval(3600), batteryStart: nil))
+        let m = h.makeManager()
+        await m.reconcile()
+        let summary = h.notifier.posts.last { $0.title == SessionReport.title }
+        XCTAssertEqual(summary?.body, "Ran 1m (Awake was not running when it ended).")
+    }
+
+    /// A session that ends in this process still counts to its real end.
+    func testASessionEndedHereCountsToItsEnd() async throws {
+        let m = h.makeManager()
+        await m.start(duration: 3600)
+        h.clock.advance(125)
+        await m.end(reason: .user)
+        let summary = h.notifier.posts.last { $0.title == SessionReport.title }
+        XCTAssertTrue(summary?.body.hasPrefix("Ran 2m 5s (ended by you).") ?? false, summary?.body ?? "")
+    }
 }
