@@ -4,16 +4,33 @@ import SwiftUI
 /// Menu bar app. The status item is an `NSStatusItem` hosting SwiftUI, and
 /// the settings window is an `NSWindow` this app opens itself (see
 /// `SettingsWindow`), so there is no SwiftUI scene with any content in it.
-/// `App` still requires one, hence the empty `Settings`. main.swift starts
-/// this app unless the command line asks for a one-shot mode first.
+/// `App` still requires one. It used to be an empty `Settings` scene, which
+/// put a "Settings…" item in the app menu that opened an empty "Awake
+/// Settings" window. The scene is now a menu bar extra that is never
+/// inserted (it makes no window and no item), and the app menu's
+/// "Settings…" with its Cmd-comma opens the one real settings window, the
+/// same one the status item opens. main.swift starts this app unless the
+/// command line asks for a one-shot mode first.
 struct AwakeApp: App {
     @NSApplicationDelegateAdaptor private var delegate: AppDelegate
 
     var body: some Scene {
-        Settings {
+        MenuBarExtra("Awake", isInserted: .constant(false)) {
             EmptyView()
         }
+        .commands {
+            CommandGroup(replacing: .appSettings) {
+                Button(SettingsCommand.title) { delegate.showSettings() }
+                    .keyboardShortcut(SettingsCommand.key, modifiers: .command)
+            }
+        }
     }
+}
+
+/// The app menu's settings item: its title and its Cmd-comma.
+enum SettingsCommand {
+    static let title = "Settings…"
+    static let key: KeyEquivalent = ","
 }
 
 @MainActor
@@ -47,6 +64,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             locationPermission = LocationPermission()
         }
         super.init()
+    }
+
+    /// The one way to the settings window: the status item's menu, the
+    /// app menu's "Settings…" and Cmd-comma all come here.
+    func showSettings() {
+        settingsWindow?.show()
     }
 
     func applicationWillFinishLaunching(_ notification: Notification) {
@@ -89,8 +112,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             )
         }
         settingsWindow = settings
-        statusItem = StatusItemController(manager: manager, status: status) { [weak settings] in
-            settings?.show()
+        statusItem = StatusItemController(manager: manager, status: status) { [weak self] in
+            self?.showSettings()
         }
         // Step E: updates.
         updater.start(automaticChecks: manager.config.automaticUpdates)
