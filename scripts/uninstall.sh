@@ -34,6 +34,11 @@
 # the files Awake writes (see Paths.swift), the session.json copies the
 # app or backstop.sh moved aside (session.json.unreadable-<stamp>, only that
 # exact shape), and then rmdir's its own directories only if they are empty.
+# That includes status.json, report.json, lease-state.json, pre-end.json,
+# audit.log and audit.log.1, awake-hook.sh, the hooks.sock socket and each
+# leases/<id>.json. With or without --purge, the `awake` command link in
+# /usr/local/bin or ~/.local/bin goes only when it is a symlink to the
+# command inside an Awake.app bundle, and never with sudo.
 # Only regular files are removed; anything else at one of those paths is
 # left with a message. The lock file is never unlinked, so --purge leaves
 # APP_SUPPORT/.recovery.lock (and therefore APP_SUPPORT). The bundle trees
@@ -80,6 +85,7 @@ MKDIR=/bin/mkdir
 RM=/bin/rm
 RMDIR=/bin/rmdir
 MKTEMP=/usr/bin/mktemp
+READLINK=/usr/bin/readlink
 LOCK_TIMEOUT_SECONDS=10
 # How long to wait for the app to exit after asking it to quit.
 QUIT_WAIT_SECONDS=10
@@ -92,6 +98,9 @@ QUIT_WAIT_SECONDS=10
 CALL_TIMEOUT_SECONDS=30
 APP="$HOME/Applications/Awake.app"
 SUDOERS=/etc/sudoers.d/awake
+# Where scripts/link-cli.sh and Settings > Leases put the `awake` command.
+CLI_SYSTEM_BIN=/usr/local/bin
+CLI_USER_BIN="$HOME/.local/bin"
 # The --resume-frozen interface version this checkout's backstop.sh speaks
 # (see step 3).
 RESUME_FROZEN_VERSION=1
@@ -751,6 +760,51 @@ remove_owned() { # path...
   return 0
 }
 
+# Removes the `awake` command link in each directory given: only a symlink
+# named awake whose target is the command inside an Awake.app bundle
+# (.../Awake.app/Contents/Helpers/awake), which is what link-cli.sh and the
+# Settings button make. Anything else named awake (a file, a directory, a
+# link to another program) is not Awake's and is left and named. Never sudo:
+# a link that cannot be removed without it is named and counted.
+remove_cli_links() { # directory...
+  local dir link target
+  for dir in "$@"; do
+    link="$dir/awake"
+    if [[ -L "$link" ]]; then
+      target="$("$READLINK" "$link" 2>/dev/null || true)"
+      case "$target" in
+        */Awake.app/Contents/Helpers/awake)
+          if "$RM" -f "$link" 2>/dev/null; then
+            echo "removed $link (a link to $target)"
+          else
+            echo "Could not remove $link (a link to $target); remove it yourself." >&2
+            remove_failures=$((remove_failures + 1))
+          fi
+          ;;
+        *) echo "Left $link: it links to $target, not into an Awake.app bundle." ;;
+      esac
+    elif [[ -e "$link" ]]; then
+      echo "Left $link: it is not a link, so Awake did not put it there."
+    fi
+  done
+  return 0
+}
+
+# Removes the socket the app listens on for agent hooks. Only a socket at
+# that path is removed; the app is not running, so nothing is bound to it.
+remove_owned_socket() { # path
+  local f="$1"
+  if [[ -S "$f" && ! -L "$f" ]]; then
+    if ! "$RM" -f "$f"; then
+      echo "Could not remove $f; left in place." >&2
+      remove_failures=$((remove_failures + 1))
+    fi
+  elif [[ -e "$f" || -L "$f" ]]; then
+    echo "Left $f: it is not a socket, so Awake did not write it."
+  fi
+  return 0
+}
+
 abort_incomplete() { # backstop exit status, problem lines...
   local rc="$1"; shift
   cat >&2 <<MSG
@@ -1054,6 +1108,9 @@ for dir in "$APP_DIR"/.Awake.app.staging.*; do
   echo "removed $dir, left by an install.sh run that is gone"
 done
 
+step "Removing the awake command link"
+remove_cli_links "$CLI_SYSTEM_BIN" "$CLI_USER_BIN"
+
 # $APP_SUPPORT/backstop.sh below is the writable copy of older installs; the
 # current one went with the bundle.
 if (( PURGE == 1 )); then
@@ -1062,6 +1119,23 @@ if (( PURGE == 1 )); then
         "$APP_SUPPORT/unfinished-command.json" \
         "$LOG_DIR/awake.log" "$LOG_DIR/awake.log.1" \
         "$LOG_DIR/handoffs.log" "$LOG_DIR/handoffs.log.1"
+  # What the app writes beside the journal: the menu's status, the session
+  # report, the lease clock, the phone's audit log and its rotated copy, the
+  # agent hook script and its socket, the record of a pre-end save, and one
+  # file per lease (leases/<id>.json; the directory goes only once empty).
+  remove_owned "$APP_SUPPORT/status.json" "$APP_SUPPORT/report.json" \
+        "$APP_SUPPORT/lease-state.json" "$APP_SUPPORT/pre-end.json" \
+        "$APP_SUPPORT/audit.log" "$APP_SUPPORT/audit.log.1" \
+        "$APP_SUPPORT/awake-hook.sh"
+  remove_owned_socket "$APP_SUPPORT/hooks.sock"
+  LEASES_DIR="$APP_SUPPORT/leases"
+  if [[ -d "$LEASES_DIR" && ! -L "$LEASES_DIR" ]]; then
+    for lease in "$LEASES_DIR"/*.json; do
+      [[ -e "$lease" || -L "$lease" ]] || continue
+      remove_owned "$lease"
+    done
+    "$RMDIR" "$LEASES_DIR" 2>/dev/null || echo "Kept $LEASES_DIR: it still holds files that are not leases."
+  fi
   (( ${#kept_brightness[@]} > 0 )) || remove_owned "$STATE"
   collect_moved_aside_sessions
   if (( ${#MOVED_ASIDE[@]} > 0 )); then
