@@ -331,7 +331,10 @@ enum CLI {
             let weak = status["chargerDraining"] as? Bool == true
             lines.append("Battery: \(percent)%\(charging ? (weak ? ", charger too weak" : ", charging") : "")")
         }
-        if let closed = status["lidClosed"] as? Bool {
+        if status["lidKnown"] as? Bool == false {
+            // The Mac cannot read its lid (a desktop, a virtual machine).
+            lines.append("Lid: unknown")
+        } else if let closed = status["lidClosed"] as? Bool {
             let desk = status["lidOnDesk"] as? Bool == true
             lines.append("Lid: \(closed ? (desk ? "closed, external display" : "closed") : "open")")
         }

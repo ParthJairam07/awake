@@ -9,6 +9,10 @@ import Observation
 @Observable
 final class SystemStatus {
     var lidClosed: Bool = false
+    /// False when this Mac's lid state cannot be read (a desktop, a
+    /// virtual machine) and no lid event has said what it is: `lidClosed`
+    /// is then no reading, and nothing may show it as "open".
+    var lidKnown: Bool = true
     /// The lid is closed on a desk with an external display online, so the
     /// lid actions were not run (`LidPolicy.desk`).
     var lidOnDesk: Bool = false
@@ -69,7 +73,9 @@ final class AppServices {
     private let processControl: any ProcessSignaling
     private let docker: DockerRule
     private let keychain: any KeychainStoring
-    private let lid = LidObserver()
+    private let lid: LidObserver
+    /// The lid as the hardware reports it: nil when it cannot be read.
+    private let clamshell: @Sendable () -> Bool?
     /// Display connects and disconnects, for the desk-mode decision on a
     /// closed lid (`LidPolicy`).
     private let displays: DisplayObserver
@@ -133,8 +139,11 @@ final class AppServices {
         lidSimulationEnabled: Bool = LidSimulationBuild.isCompiledIn,
         externalDisplay: @escaping DisplayObserver.Reader = { ExternalDisplays.read() },
         locker: any ScreenLocking = LoginFrameworkScreenLock(),
-        freeDisk: @escaping ResourceMonitor.DiskReader = { ResourceMonitor.readFreeDisk() }
+        freeDisk: @escaping ResourceMonitor.DiskReader = { ResourceMonitor.readFreeDisk() },
+        clamshell: @escaping @Sendable () -> Bool? = { LidObserver.readClamshellState() }
     ) {
+        self.clamshell = clamshell
+        self.lid = LidObserver(read: clamshell)
         self.paths = paths
         self.notifier = notifier
         self.audio = audio
@@ -188,6 +197,7 @@ final class AppServices {
         lid.onChange = { [weak self] closed in self?.lidChanged(closed) }
         lid.start()
         status.lidClosed = lid.isClosed
+        status.lidKnown = clamshell() != nil
         status.lidOnDesk = false
         sampleBrightnessIfLidOpen()
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -280,6 +290,7 @@ final class AppServices {
             remainingSeconds: session.map { max(0, Int($0.endsAt.timeIntervalSince(now))) },
             lidClosed: status.lidClosed,
             lidOnDesk: status.lidOnDesk,
+            lidKnown: status.lidKnown,
             batteryPercent: status.batteryPercent,
             isCharging: status.isCharging,
             chargerDraining: status.chargerDraining && status.hasBattery,
@@ -310,10 +321,12 @@ final class AppServices {
     /// One-shot launch diagnostics. This does not start any observer or retry
     /// timer, so system integrations remain active only during a session.
     func logStartupSnapshot() {
-        if let closed = LidObserver.readClamshellState() {
+        if let closed = clamshell() {
             status.lidClosed = closed
+            status.lidKnown = true
             Log.info("startup lid state \(closed ? "closed" : "open")")
         } else {
+            status.lidKnown = false
             Log.info("startup lid state unavailable")
         }
 
@@ -335,7 +348,13 @@ final class AppServices {
     func refreshInstant() {
         power.refreshBattery()
         syncPower()
-        if let now = LidObserver.readClamshellState() { status.lidClosed = now }
+        if let now = clamshell() {
+            status.lidClosed = now
+            status.lidKnown = true
+        } else if lastLidEvent == nil {
+            // No reading and no lid event this session: unknown, not open.
+            status.lidKnown = false
+        }
         syncState()
     }
 
@@ -470,6 +489,7 @@ final class AppServices {
     private func lidChanged(_ closed: Bool) {
         lastLidEvent = closed
         status.lidClosed = closed
+        status.lidKnown = true
         guard let actions = lidActions else { return }
         let policy = LidPolicy.decide(closed: closed, externalOnline: displays.externalOnline, config: manager?.config ?? Config())
         status.lidOnDesk = policy == .desk

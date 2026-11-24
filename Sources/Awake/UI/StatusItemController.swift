@@ -679,6 +679,7 @@ final class StatusItemController: NSObject {
             machine: StatusLines.machine(
                 lidClosed: status.lidClosed,
                 lidOnDesk: status.lidOnDesk,
+                lidKnown: status.lidKnown,
                 watts: status.instantWatts(),
                 wifiSSID: WiFiStatusName.display(
                     ssid: status.wifiSSID,

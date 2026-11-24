@@ -7,6 +7,8 @@ import Observation
 @MainActor
 protocol StatusSource: AnyObject, Observable {
     var lidClosed: Bool { get }
+    /// False when the lid state cannot be read: unknown, not open.
+    var lidKnown: Bool { get }
     /// Lid closed on a desk with an external display: actions skipped.
     var lidOnDesk: Bool { get }
     var batteryPercent: Int? { get }
@@ -43,6 +45,8 @@ protocol StatusSource: AnyObject, Observable {
 extension StatusSource {
     /// A source that does not say has a battery, as before the key.
     var hasBattery: Bool { true }
+    /// A source that does not say has a lid it can read, as before the key.
+    var lidKnown: Bool { true }
 }
 
 /// Stand-in until the system layer is plugged in. Reports nothing.
@@ -76,8 +80,9 @@ enum StatusLines {
     /// "Lid: closed · 4.1 W · Wi-Fi: iPhone". Unknown parts are omitted. A
     /// charger that is losing to the load reads "64% charger too weak". A
     /// Mac with no battery reads "mains power", never a battery wording.
-    static func machine(lidClosed: Bool, lidOnDesk: Bool = false, watts: Double?, wifiSSID: String?, batteryPercent: Int?, isCharging: Bool, chargerDraining: Bool = false, hasBattery: Bool = true) -> String {
-        var parts: [String] = ["Lid: \(lidClosed ? (lidOnDesk ? "closed, external display" : "closed") : "open")"]
+    /// A lid that cannot be read is "Lid: unknown", never "open".
+    static func machine(lidClosed: Bool, lidOnDesk: Bool = false, lidKnown: Bool = true, watts: Double?, wifiSSID: String?, batteryPercent: Int?, isCharging: Bool, chargerDraining: Bool = false, hasBattery: Bool = true) -> String {
+        var parts: [String] = ["Lid: \(lidText(closed: lidClosed, onDesk: lidOnDesk, known: lidKnown))"]
         if let w = watts {
             parts.append(String(format: "%.1f W", w))
         }
@@ -94,6 +99,13 @@ enum StatusLines {
             parts.append("Wi-Fi: \(ssid)")
         }
         return parts.joined(separator: " \u{00B7} ")
+    }
+
+    /// The lid in words, the same in the menu, `awake status` and the
+    /// phone: "unknown" when it cannot be read.
+    static func lidText(closed: Bool, onDesk: Bool, known: Bool) -> String {
+        guard known else { return "unknown" }
+        return closed ? (onDesk ? "closed, external display" : "closed") : "open"
     }
 
     /// "3 apps frozen · Docker paused", or nil when nothing is held.

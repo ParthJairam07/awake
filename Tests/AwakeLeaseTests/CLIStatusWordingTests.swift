@@ -21,4 +21,13 @@ final class CLIStatusWordingTests: XCTestCase {
         XCTAssertTrue(lines(["batteryPercent": 41, "isCharging": false]).contains("Battery: 41%"), "a status.json from before hasBattery")
         XCTAssertFalse(lines(["hasBattery": true]).contains { $0.hasPrefix("Power") || $0.hasPrefix("Battery") }, "an unreadable battery is not mains power")
     }
+
+    /// A Mac that cannot read its lid: unknown, not open.
+    func testAnUnreadableLidIsUnknown() {
+        let out = lines(["lidClosed": false, "lidOnDesk": false, "lidKnown": false])
+        XCTAssertTrue(out.contains("Lid: unknown"), "\(out)")
+        XCTAssertFalse(out.contains("Lid: open"), "\(out)")
+        XCTAssertTrue(lines(["lidClosed": false, "lidKnown": true]).contains("Lid: open"))
+        XCTAssertTrue(lines(["lidClosed": true, "lidOnDesk": true]).contains("Lid: closed, external display"), "a status.json from before lidKnown")
+    }
 }

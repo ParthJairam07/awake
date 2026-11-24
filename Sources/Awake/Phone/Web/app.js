@@ -125,6 +125,13 @@
     return bytes;
   }
 
+  // The lid in words, for the Session tab (status.json) and the Machine
+  // tab: a lid that cannot be read is "unknown", never "open".
+  function lidText(closed, onDesk, known) {
+    if (known === false || closed == null) return 'unknown';
+    return closed ? (onDesk ? 'closed, external display' : 'closed') : 'open';
+  }
+
   // The Session tab's power line as [label, text, tone], or null for no
   // line. A Mac with no battery is on mains: never "on battery".
   function sessionPowerFact(status) {
@@ -160,7 +167,7 @@
     module.exports = {
       formatRemaining: formatRemaining, formatMinutes: formatMinutes, formatAge: formatAge, formatBytes: formatBytes,
       ringFraction: ringFraction, stateLabel: stateLabel, backoffSeconds: backoffSeconds, EventParser: EventParser,
-      sessionPowerFact: sessionPowerFact, machinePowerFacts: machinePowerFacts,
+      lidText: lidText, sessionPowerFact: sessionPowerFact, machinePowerFacts: machinePowerFacts,
       guessDeviceName: guessDeviceName, pairingCodeFromHash: pairingCodeFromHash, base64UrlToBytes: base64UrlToBytes
     };
     return;
@@ -537,7 +544,7 @@
     } else {
       var power = sessionPowerFact(status);
       if (power) fact(facts, power[0], power[1], power[2]);
-      fact(facts, 'Lid', status.lidClosed ? (status.lidOnDesk ? 'closed, external display' : 'closed') : 'open');
+      fact(facts, 'Lid', lidText(status.lidClosed, status.lidOnDesk, status.lidKnown));
       fact(facts, 'Heat', status.thermalState || 'unknown', status.thermalState === 'serious' ? 'warn' : status.thermalState === 'critical' ? 'bad' : null);
       if (status.lowPowerSetByUs) fact(facts, 'Low Power Mode', 'on, set by Awake');
       if (status.frozenCount) fact(facts, 'Frozen apps', String(status.frozenCount));
@@ -702,7 +709,7 @@
       if (m.networkType === 'none') network = 'no connection';
       fact(list, 'Network', network, m.networkType === 'none' ? 'bad' : null);
       fact(list, 'Tailscale', m.tailscaleIPv4 || 'not found', m.tailscaleIPv4 ? null : 'warn');
-      fact(list, 'Lid', unknown(m.lidClosed, m.lidClosed ? 'closed' : 'open'));
+      fact(list, 'Lid', lidText(m.lidClosed, false, true));
       fact(list, 'Low Power Mode', unknown(m.lowPowerMode, m.lowPowerMode ? 'on' : 'off'));
       if (m.uptimeSeconds != null) fact(list, 'Up for', formatAge(m.uptimeSeconds));
       $('machine-note').textContent = 'Read from the Mac at ' + new Date().toLocaleTimeString() + '. "unknown" means the Mac could not take that reading.';

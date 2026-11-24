@@ -12,6 +12,7 @@ final class LiveStatusSource: StatusSource {
     }
 
     var lidClosed: Bool { services.status.lidClosed }
+    var lidKnown: Bool { services.status.lidKnown }
     var lidOnDesk: Bool { services.status.lidOnDesk }
     var batteryPercent: Int? { services.status.batteryPercent }
     var hasBattery: Bool { services.status.hasBattery }
