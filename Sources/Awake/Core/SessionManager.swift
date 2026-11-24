@@ -1437,7 +1437,13 @@ final class SessionManager {
 
     private func performEnd(reason: EndReason) async -> EndOutcome {
         let had = session != nil
-        Log.info("session end (\(reason.rawValue))")
+        // An end with no session, nothing journaled and no earlier end
+        // still owed undoes nothing: it runs the same steps, which change
+        // nothing, and says nothing afterwards (a quit of an idle app
+        // used to post "Session restored").
+        let nothingToUndo = !had && keptSessionFile == nil && pendingEnd == nil && report == nil
+            && effectiveState.undoEntries == RuntimeState.clean.undoEntries && owedEdits.isEmpty
+        Log.info(nothingToUndo ? "\(reason.rawValue): no session and nothing to undo" : "session end (\(reason.rawValue))")
         stopTimers()
         countdownPaused = false
         let ended = session
@@ -1571,6 +1577,9 @@ final class SessionManager {
             // from `end()` is harmless).
             if !agentCanFinish { scheduleEndRetry(reason) }
             return .incomplete(agentArmed: agentCanFinish)
+        }
+        if nothingToUndo, Self.endTitle(reason, had: false) == Self.restoredTitle {
+            return .restored
         }
         notifier.post(title: Self.endTitle(reason, had: had), body: endBody(reason, waiting: waiting))
         postSummary(reason: reason, restored: true)
@@ -3331,6 +3340,7 @@ final class SessionManager {
         ISO8601DateFormatter().string(from: d)
     }
 
+    static let restoredTitle = "Session restored"
     static let incompleteTitle = "Restore incomplete"
     static let notEndedTitle = "Session not ended"
     static let journalTitle = "Recovery journal unreadable"
@@ -3344,7 +3354,7 @@ final class SessionManager {
         switch reason {
         case .backstop: "Sleep restored"
         case .startFailed: "Session not started"
-        default: had ? "Session ended" : "Session restored"
+        default: had ? "Session ended" : restoredTitle
         }
     }
 
