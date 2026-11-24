@@ -13,6 +13,8 @@ final class SystemStatus {
     /// lid actions were not run (`LidPolicy.desk`).
     var lidOnDesk: Bool = false
     var batteryPercent: Int?
+    /// False on a Mac with no battery: it is on mains power.
+    var hasBattery: Bool = true
     var isCharging: Bool = false
     /// On AC but losing charge: the charger is too weak for the load.
     var chargerDraining: Bool = false
@@ -280,7 +282,8 @@ final class AppServices {
             lidOnDesk: status.lidOnDesk,
             batteryPercent: status.batteryPercent,
             isCharging: status.isCharging,
-            chargerDraining: status.chargerDraining,
+            chargerDraining: status.chargerDraining && status.hasBattery,
+            hasBattery: status.hasBattery,
             thermalState: PowerMonitor.name(status.thermalState),
             lowPowerSetByUs: manager?.state.lowPowerSetByUs ?? false,
             wifiSSID: status.wifiSSID,
@@ -584,6 +587,7 @@ final class AppServices {
 
     private func syncPower() {
         status.batteryPercent = power.percent
+        status.hasBattery = power.hasBattery
         status.isCharging = power.isCharging
         status.chargerDraining = power.chargerDraining
         status.thermalState = power.thermalState

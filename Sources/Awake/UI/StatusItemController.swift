@@ -686,7 +686,8 @@ final class StatusItemController: NSObject {
                 ),
                 batteryPercent: status.batteryPercent,
                 isCharging: status.isCharging,
-                chargerDraining: status.chargerDraining
+                chargerDraining: status.chargerDraining,
+                hasBattery: status.hasBattery
             ),
             actions: StatusLines.actions(
                 frozenCount: status.frozenCount,

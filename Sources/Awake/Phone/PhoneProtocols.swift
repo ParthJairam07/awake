@@ -76,6 +76,9 @@ protocol ScreenCapturing: Sendable {
 /// not be read is nil, and the phone says "unknown": never a guess.
 struct PhoneMachineInfo: Codable, Equatable, Sendable {
     var hostName: String?
+    /// False on a Mac with no battery: it is on mains power, and the
+    /// battery values below are nil because there is nothing to read.
+    var hasBattery: Bool?
     var batteryPercent: Int?
     /// On AC power or charging.
     var isCharging: Bool?

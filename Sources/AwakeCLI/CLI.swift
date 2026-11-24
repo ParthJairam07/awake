@@ -324,7 +324,9 @@ enum CLI {
         } else {
             lines.append("Session: none")
         }
-        if let percent = status["batteryPercent"] as? Int {
+        if status["hasBattery"] as? Bool == false {
+            lines.append("Power: mains (no battery)")
+        } else if let percent = status["batteryPercent"] as? Int {
             let charging = status["isCharging"] as? Bool == true
             let weak = status["chargerDraining"] as? Bool == true
             lines.append("Battery: \(percent)%\(charging ? (weak ? ", charger too weak" : ", charging") : "")")

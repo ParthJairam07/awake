@@ -10,6 +10,8 @@ protocol StatusSource: AnyObject, Observable {
     /// Lid closed on a desk with an external display: actions skipped.
     var lidOnDesk: Bool { get }
     var batteryPercent: Int? { get }
+    /// False on a Mac with no battery: it is on mains power.
+    var hasBattery: Bool { get }
     var isCharging: Bool { get }
     /// On AC but losing charge (`ChargerTrend`).
     var chargerDraining: Bool { get }
@@ -36,6 +38,11 @@ protocol StatusSource: AnyObject, Observable {
     func instantWatts() -> Double?
     /// Relaunch the browser the user confirmed, as the menu item named it.
     func relaunchUnthrottled(_ browser: ThrottledBrowser)
+}
+
+extension StatusSource {
+    /// A source that does not say has a battery, as before the key.
+    var hasBattery: Bool { true }
 }
 
 /// Stand-in until the system layer is plugged in. Reports nothing.
@@ -67,13 +74,16 @@ final class PlaceholderStatus: StatusSource {
 /// it can be tested.
 enum StatusLines {
     /// "Lid: closed · 4.1 W · Wi-Fi: iPhone". Unknown parts are omitted. A
-    /// charger that is losing to the load reads "64% charger too weak".
-    static func machine(lidClosed: Bool, lidOnDesk: Bool = false, watts: Double?, wifiSSID: String?, batteryPercent: Int?, isCharging: Bool, chargerDraining: Bool = false) -> String {
+    /// charger that is losing to the load reads "64% charger too weak". A
+    /// Mac with no battery reads "mains power", never a battery wording.
+    static func machine(lidClosed: Bool, lidOnDesk: Bool = false, watts: Double?, wifiSSID: String?, batteryPercent: Int?, isCharging: Bool, chargerDraining: Bool = false, hasBattery: Bool = true) -> String {
         var parts: [String] = ["Lid: \(lidClosed ? (lidOnDesk ? "closed, external display" : "closed") : "open")"]
         if let w = watts {
             parts.append(String(format: "%.1f W", w))
         }
-        if let p = batteryPercent {
+        if !hasBattery {
+            parts.append("mains power")
+        } else if let p = batteryPercent {
             if isCharging {
                 parts.append(chargerDraining ? "\(p)% charger too weak" : "\(p)% charging")
             } else {

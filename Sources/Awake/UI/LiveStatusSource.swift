@@ -14,6 +14,7 @@ final class LiveStatusSource: StatusSource {
     var lidClosed: Bool { services.status.lidClosed }
     var lidOnDesk: Bool { services.status.lidOnDesk }
     var batteryPercent: Int? { services.status.batteryPercent }
+    var hasBattery: Bool { services.status.hasBattery }
     var isCharging: Bool { services.status.isCharging }
     var chargerDraining: Bool { services.status.chargerDraining }
     var wifiSSID: String? { services.status.wifiSSID }

@@ -125,10 +125,42 @@
     return bytes;
   }
 
+  // The Session tab's power line as [label, text, tone], or null for no
+  // line. A Mac with no battery is on mains: never "on battery".
+  function sessionPowerFact(status) {
+    if (status.hasBattery === false) return ['Power', 'mains (no battery)', null];
+    // No reading (a failed read): the Machine tab says so.
+    if (status.batteryPercent == null) return null;
+    var battery = status.batteryPercent + '%';
+    if (status.chargerDraining) return ['Battery', battery + ', charger too weak', 'warn'];
+    return ['Battery', battery + (status.isCharging ? ', on power' : ', on battery'), !status.isCharging && status.batteryPercent < 20 ? 'bad' : null];
+  }
+
+  // The Machine tab's battery, trend and charger lines, each as
+  // [label, text, tone]. A Mac with no battery has one "no battery" line
+  // and one "mains" line: no trend, and no charger "not connected".
+  function machinePowerFacts(m) {
+    var noBattery = m.hasBattery === false || (m.hasBattery == null && m.batteryPercent == null && m.isCharging == null);
+    if (noBattery) return [['Battery', 'no battery', null], ['Power', 'mains', null]];
+    var facts = [['Battery', m.batteryPercent == null ? 'unknown' : m.batteryPercent + '%', m.batteryPercent != null && m.batteryPercent < 20 && !m.isCharging ? 'bad' : null]];
+    if (m.batteryWatts != null) {
+      var w = Math.abs(m.batteryWatts).toFixed(1) + ' W';
+      facts.push(['Trend', m.batteryWatts < -0.05 ? 'draining ' + w : m.batteryWatts > 0.05 ? 'charging ' + w : 'steady', m.batteryWatts < -0.05 && m.isCharging ? 'warn' : null]);
+    } else {
+      facts.push(['Trend', 'unknown', null]);
+    }
+    var charger = m.isCharging == null ? 'unknown' : m.isCharging ? 'connected' : 'not connected';
+    if (m.isCharging && m.adapterWatts) charger += ', ' + m.adapterWatts + ' W';
+    if (m.chargerDraining) charger += ', too weak for the load';
+    facts.push(['Charger', charger, m.chargerDraining ? 'warn' : null]);
+    return facts;
+  }
+
   if (typeof module !== 'undefined' && module.exports) {
     module.exports = {
       formatRemaining: formatRemaining, formatMinutes: formatMinutes, formatAge: formatAge, formatBytes: formatBytes,
       ringFraction: ringFraction, stateLabel: stateLabel, backoffSeconds: backoffSeconds, EventParser: EventParser,
+      sessionPowerFact: sessionPowerFact, machinePowerFacts: machinePowerFacts,
       guessDeviceName: guessDeviceName, pairingCodeFromHash: pairingCodeFromHash, base64UrlToBytes: base64UrlToBytes
     };
     return;
@@ -503,11 +535,8 @@
     if (!state.status) {
       fact(facts, 'Status', 'waiting for the Mac…');
     } else {
-      var battery = status.batteryPercent == null ? 'unknown' : status.batteryPercent + '%';
-      // No reading (a desktop Mac, or a failed read): the Machine tab says which.
-      if (status.batteryPercent == null) { /* no line */ }
-      else if (status.chargerDraining) fact(facts, 'Battery', battery + ', charger too weak', 'warn');
-      else fact(facts, 'Battery', battery + (status.isCharging ? ', on power' : ', on battery'), !status.isCharging && status.batteryPercent != null && status.batteryPercent < 20 ? 'bad' : null);
+      var power = sessionPowerFact(status);
+      if (power) fact(facts, power[0], power[1], power[2]);
       fact(facts, 'Lid', status.lidClosed ? (status.lidOnDesk ? 'closed, external display' : 'closed') : 'open');
       fact(facts, 'Heat', status.thermalState || 'unknown', status.thermalState === 'serious' ? 'warn' : status.thermalState === 'critical' ? 'bad' : null);
       if (status.lowPowerSetByUs) fact(facts, 'Low Power Mode', 'on, set by Awake');
@@ -662,19 +691,7 @@
       var m = result.data;
       clear(list);
       function unknown(value, text) { return value == null ? 'unknown' : text; }
-      var battery = unknown(m.batteryPercent, m.batteryPercent + '%');
-      if (m.batteryPercent == null && m.isCharging == null) battery = 'no battery';
-      fact(list, 'Battery', battery, m.batteryPercent != null && m.batteryPercent < 20 && !m.isCharging ? 'bad' : null);
-      if (m.batteryWatts != null) {
-        var w = Math.abs(m.batteryWatts).toFixed(1) + ' W';
-        fact(list, 'Trend', m.batteryWatts < -0.05 ? 'draining ' + w : m.batteryWatts > 0.05 ? 'charging ' + w : 'steady', m.batteryWatts < -0.05 && m.isCharging ? 'warn' : null);
-      } else {
-        fact(list, 'Trend', 'unknown');
-      }
-      var charger = m.isCharging == null ? 'unknown' : m.isCharging ? 'connected' : 'not connected';
-      if (m.isCharging && m.adapterWatts) charger += ', ' + m.adapterWatts + ' W';
-      if (m.chargerDraining) charger += ', too weak for the load';
-      fact(list, 'Charger', charger, m.chargerDraining ? 'warn' : null);
+      machinePowerFacts(m).forEach(function (f) { fact(list, f[0], f[1], f[2]); });
       fact(list, 'Heat', m.thermalState || 'unknown', m.thermalState === 'serious' ? 'warn' : m.thermalState === 'critical' ? 'bad' : null);
       fact(list, 'CPU speed limit', m.cpuSpeedLimit == null ? 'none recorded' : m.cpuSpeedLimit + '%', m.cpuSpeedLimit != null && m.cpuSpeedLimit <= 50 ? 'warn' : null);
       fact(list, 'Battery temperature', m.batteryTemperatureC == null ? 'not reported' : m.batteryTemperatureC.toFixed(1) + ' °C', m.batteryTemperatureC != null && m.batteryTemperatureC >= 45 ? 'warn' : null);
