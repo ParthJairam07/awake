@@ -1,0 +1,17 @@
+2026-11-24T02:03:18Z [info] awake: quit: no session and nothing to undo
+2026-11-24T02:03:18Z [info] awake: setup: window closed by quitting; setup shows again at the next launch
+2026-11-24T02:03:25Z [info] awake: startup lid state unavailable
+2026-11-24T02:03:25Z [info] awake: startup battery n/a (no battery)
+2026-11-24T02:03:25Z [info] awake: startup thermal state nominal
+2026-11-24T02:03:25Z [info] awake: launched, version 0.1.0 (1)
+2026-11-24T02:03:25Z [info] awake: status item installed: window {{0, 0}, {16, 0}} button {{0, 0}, {32, 22}} host {{0, 0}, {32, 22}} fitting {32, 22} length 32.0
+2026-11-24T02:03:25Z [info] awake: status item installed: visible true alpha 1.0 occlusion 8192 screen Apple Virtual {{0, 0}, {1600, 1200}} safe {0.0,0.0,0.0,0.0} button hidden false alpha 1.0 host hidden false alpha 1.0
+2026-11-24T02:03:25Z [info] awake: updater disabled: This build carries no update signing key, so it cannot check that a download is genuine. It does not update itself.
+2026-11-24T02:03:25Z [info] awake: setup: first run, showing the Setup window
+2026-11-24T02:03:25Z [info] awake: reconcile: no session, nothing to restore
+2026-11-24T02:03:25Z [info] awake: this Mac has no Wi-Fi port: hotspot failover is off, the internet check still runs
+2026-11-24T02:03:26Z [info] awake: status item after 1s: window {{1322, 1170}, {48, 30}} button {{0, 0}, {32, 22}} host {{0, 0}, {32, 22}} fitting {32, 22} length 32.0
+2026-11-24T02:03:26Z [info] awake: status item after 1s: visible true alpha 1.0 occlusion 8194 screen Apple Virtual {{0, 0}, {1600, 1200}} safe {0.0,0.0,0.0,0.0} button hidden false alpha 1.0 host hidden false alpha 1.0
+2026-11-24T02:03:42Z [info] awake: this Mac has no Wi-Fi port: hotspot failover is off, the internet check still runs
+2026-11-24T02:04:45Z [info] awake: quit: no session and nothing to undo
+2026-11-24T02:04:45Z [info] awake: setup: window closed by quitting; setup shows again at the next launch

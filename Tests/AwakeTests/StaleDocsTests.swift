@@ -37,4 +37,22 @@ final class StaleDocsTests: XCTestCase {
         XCTAssertTrue(workflow.contains("if: steps.attest.outputs.available == 'true'\n        uses: actions/attest-build-provenance@"))
         XCTAssertTrue(workflow.contains(#"origin="**No attestation:**"#), "the private-repository fallback")
     }
+
+    /// Every finding of the November 19 run that was fixed is under "Fixed
+    /// since" with its commit, and no longer under the open findings.
+    func testTheValidationRecordMovesTheFixedFindings() throws {
+        let record = try file("docs/release-validation.md")
+        let open = try XCTUnwrap(record.range(of: "### Open findings, not fixed"))
+        let fixed = try XCTUnwrap(record.range(of: "### Fixed since"))
+        let notRun = try XCTUnwrap(record.range(of: "### Not run here"))
+        XCTAssertLessThan(fixed.lowerBound, open.lowerBound)
+        let stillOpen = String(record[open.upperBound..<notRun.lowerBound])
+        for gone in ["Session restored", "no Wi-Fi port", "Lid: open", "Ran 3m 39s", "empty \"Awake Settings\" window", "link-cli.sh"] {
+            XCTAssertFalse(stillOpen.contains(gone), "still listed as open: \(gone)")
+        }
+        let fixedList = String(record[fixed.upperBound..<open.lowerBound])
+        XCTAssertEqual(fixedList.components(separatedBy: "Commit `").count - 1, 9, "nine fixes, each naming its commit")
+        XCTAssertTrue(fixedList.contains("Seen fixed on the running app"))
+        XCTAssertTrue(fixedList.contains("Unit-tested only"))
+    }
 }
