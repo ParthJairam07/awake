@@ -50,7 +50,9 @@ enum FloorRules {
         chargerDraining: Bool = false,
         thermalReading: ThermalReading = .unknown
     ) -> [Action] {
-        let onBattery = !isCharging || chargerDraining
+        // A Mac with no battery is on mains: no battery rule applies,
+        // whatever the charging flags of a battery it does not have say.
+        let onBattery = battery != .none && (!isCharging || chargerDraining)
         let percent = battery.percent
         if let p = percent, onBattery, p < config.endFloor {
             return [.endSession(.batteryFloor)]
@@ -64,7 +66,7 @@ enum FloorRules {
         if case let .unreadable(misses) = battery, onBattery, misses >= 2, config.endFloor > 0 {
             return [.endSession(.batteryUnreadable)]
         }
-        let cause = lowPowerCause(percent: percent, isCharging: isCharging, thermal: thermal, lidClosed: lidClosed, config: config, chargerDraining: chargerDraining, thermalReading: thermalReading)
+        let cause = lowPowerCause(percent: percent, isCharging: isCharging || battery == .none, thermal: thermal, lidClosed: lidClosed, config: config, chargerDraining: chargerDraining && battery != .none, thermalReading: thermalReading)
         if let cause, !lowPowerSetByUs { return [.enableLowPower(cause)] }
         if cause == nil, lowPowerSetByUs { return [.disableLowPower] }
         return []
@@ -164,7 +166,8 @@ struct FloorRuleDriver {
         guard let manager, manager.isActive, !Task.isCancelled else { return }
         let config = manager.config
         let percent = battery.percent
-        let draining = isCharging && chargerDraining
+        // Only a battery can be drained: a Mac with none has no weak charger.
+        let draining = isCharging && chargerDraining && battery != .none
         if draining, !drainingNotice.value {
             drainingNotice.value = true
             manager.noteReport { $0.chargerWeakEvents += 1 }

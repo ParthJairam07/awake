@@ -41,6 +41,10 @@ final class PowerMonitor {
     /// True when on AC power or actively charging. The floor rules treat
     /// "charger connected" as the undo condition (spec section 6).
     private(set) var isCharging: Bool = false
+    /// False on a Mac with no battery (a desktop, a virtual machine). Such
+    /// a Mac runs on mains: no battery floor, no weak-charger rule and no
+    /// "on battery" wording apply to it.
+    var hasBattery: Bool { battery != .none }
     /// True while `isCharging` and yet the battery is losing charge: the
     /// charger is too weak for the load (`ChargerTrend`). The floor rules
     /// then treat the Mac as on battery.
@@ -115,7 +119,7 @@ final class PowerMonitor {
         ) { [weak self] _ in
             Task { @MainActor in self?.handleThermal() }
         }
-        Log.info("power monitor started (battery \(Self.describe(battery)), \(isCharging ? "charging" : "on battery"), thermal \(Self.name(thermalState)))")
+        Log.info("power monitor started (battery \(Self.describe(battery)), \(Self.describeCharger(isCharging: isCharging, draining: chargerDraining, hasBattery: hasBattery)), thermal \(Self.name(thermalState)))")
     }
 
     func stop() {
@@ -171,6 +175,11 @@ final class PowerMonitor {
 
     /// Watts are only read on AC: off the charger the floors already apply.
     private func updateTrend() {
+        guard hasBattery else {
+            // No battery, no charger to be too weak for it.
+            trend = ChargerTrend()
+            return
+        }
         trend.update(percent: battery.percent, onAC: isCharging, watts: isCharging ? wattsReader() : nil)
     }
 
@@ -297,7 +306,7 @@ final class PowerMonitor {
         let before = (battery, isCharging, chargerDraining)
         readCountingMisses()
         if before != (battery, isCharging, chargerDraining) {
-            Log.info("battery \(Self.describe(battery)) \(Self.describeCharger(isCharging: isCharging, draining: chargerDraining))")
+            Log.info("battery \(Self.describe(battery)) \(Self.describeCharger(isCharging: isCharging, draining: chargerDraining, hasBattery: hasBattery))")
             onChange?()
         }
     }
@@ -316,7 +325,10 @@ final class PowerMonitor {
         }
     }
 
-    static func describeCharger(isCharging: Bool, draining: Bool) -> String {
+    /// A Mac with no battery is on mains power, whatever the charging
+    /// flag of a battery it does not have says.
+    static func describeCharger(isCharging: Bool, draining: Bool, hasBattery: Bool = true) -> String {
+        guard hasBattery else { return "on mains power" }
         if !isCharging { return "on battery" }
         return draining ? "charger too weak, draining" : "charging"
     }

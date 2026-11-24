@@ -15,9 +15,18 @@ struct StatusSnapshot: Codable, Equatable, Sendable {
     var remainingSeconds: Int?
     var lidClosed: Bool
     var lidOnDesk: Bool
+    /// False when the lid state cannot be read (a desktop, a virtual
+    /// machine): `lidClosed` is then no reading, and the lid is unknown,
+    /// not open. Declared with a default so a status.json from before
+    /// this key reads as before.
+    var lidKnown: Bool = true
     var batteryPercent: Int?
     var isCharging: Bool
     var chargerDraining: Bool
+    /// False on a Mac with no battery (a desktop, a virtual machine): it
+    /// is on mains power, and `isCharging` says nothing. Declared with a
+    /// default so a status.json from before this key reads as before.
+    var hasBattery: Bool = true
     var thermalState: String
     var lowPowerSetByUs: Bool
     var wifiSSID: String?
@@ -49,9 +58,11 @@ extension StatusSnapshot {
         remainingSeconds = try c.decodeIfPresent(Int.self, forKey: .remainingSeconds)
         lidClosed = try c.decode(Bool.self, forKey: .lidClosed)
         lidOnDesk = try c.decode(Bool.self, forKey: .lidOnDesk)
+        lidKnown = try c.decodeIfPresent(Bool.self, forKey: .lidKnown) ?? true
         batteryPercent = try c.decodeIfPresent(Int.self, forKey: .batteryPercent)
         isCharging = try c.decode(Bool.self, forKey: .isCharging)
         chargerDraining = try c.decode(Bool.self, forKey: .chargerDraining)
+        hasBattery = try c.decodeIfPresent(Bool.self, forKey: .hasBattery) ?? true
         thermalState = try c.decode(String.self, forKey: .thermalState)
         lowPowerSetByUs = try c.decode(Bool.self, forKey: .lowPowerSetByUs)
         wifiSSID = try c.decodeIfPresent(String.self, forKey: .wifiSSID)

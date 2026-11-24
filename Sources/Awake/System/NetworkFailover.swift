@@ -761,6 +761,17 @@ final class NetworkFailover {
 
     private(set) var machine = FailoverMachine()
     private(set) var wifiInterface: String?
+    /// True once `networksetup` has answered and lists no Wi-Fi port (a
+    /// desktop on Ethernet, a virtual machine). The Wi-Fi failover then
+    /// stays out of it: the path watched is the Mac's network as a whole,
+    /// no hotspot is joined or retried, and no notice names Wi-Fi. False
+    /// while the port is known or the question could not be answered.
+    private(set) var noWifiPort = false
+    /// What the path monitor watches, as the log and `process` name it.
+    private var pathSource: String { noWifiPort ? Self.networkPath : Self.wifiPath }
+    static let wifiPath = "wifi path"
+    static let networkPath = "network path"
+    static let probeSource = "internet probe"
     private(set) var lastGap: TimeInterval?
     /// Why the last join was skipped before the join itself, if it was,
     /// and for which hotspot.
@@ -786,6 +797,8 @@ final class NetworkFailover {
     /// path alone.
     private let probe: (any InternetProbing)?
     private let probeInterval: TimeInterval
+    /// `networksetup -listallhardwareports`, injectable for tests.
+    private let hardwarePorts: @Sendable () async throws -> String
     private(set) var reachability = ReachabilityTracker()
     /// The last state the path monitor reported; the probe only runs while
     /// the path itself is up, since a down path is already an outage.
@@ -824,6 +837,9 @@ final class NetworkFailover {
         clock: @escaping @Sendable () -> Date = { Date() },
         probe: (any InternetProbing)? = CaptivePortalProbe(),
         probeInterval: TimeInterval = 60,
+        hardwarePorts: @escaping @Sendable () async throws -> String = {
+            try await Shell.run(NetworkFailover.networksetup, ["-listallhardwareports"], timeout: 5).stdout
+        },
         config: @escaping @MainActor () -> Config
     ) {
         self.paths = paths
@@ -836,6 +852,7 @@ final class NetworkFailover {
         self.clock = clock
         self.probe = probe
         self.probeInterval = probeInterval
+        self.hardwarePorts = hardwarePorts
         self.configProvider = config
     }
 
@@ -845,7 +862,9 @@ final class NetworkFailover {
         await resolveInterface()
         // stop() may have run while networksetup was being awaited.
         guard !Task.isCancelled, self.epoch == epoch else { return }
-        let m = NWPathMonitor(requiredInterfaceType: .wifi)
+        // With no Wi-Fi port a Wi-Fi-only monitor is never satisfied, which
+        // read as an outage in every session: watch any interface instead.
+        let m = noWifiPort ? NWPathMonitor() : NWPathMonitor(requiredInterfaceType: .wifi)
         let id = ObjectIdentifier(m)
         m.pathUpdateHandler = { [weak self] path in
             let satisfied = path.status == .satisfied
@@ -858,7 +877,7 @@ final class NetworkFailover {
         m.start(queue: .main)
         monitor = m
         startProbeLoop()
-        Log.info("network failover started (wifi \(wifiInterface ?? "unresolved"), internet probe \(probe == nil ? "off" : "every \(Int(probeInterval)) s"))")
+        Log.info("network failover started (wifi \(wifiInterface ?? (noWifiPort ? "none, hotspot failover off" : "unresolved")), internet probe \(probe == nil ? "off" : "every \(Int(probeInterval)) s"))")
     }
 
     func stop() {
@@ -906,13 +925,14 @@ final class NetworkFailover {
 
     // MARK: Private
 
-    private func resolveInterface() async {
-        guard wifiInterface == nil else { return }
+    /// Internal so tests can resolve the port without starting a monitor.
+    func resolveInterface() async {
+        guard wifiInterface == nil, !noWifiPort else { return }
         do {
-            let r = try await Shell.run(Self.networksetup, ["-listallhardwareports"], timeout: 5)
-            wifiInterface = HardwarePortsParser.wifiInterface(from: r.stdout)
+            wifiInterface = HardwarePortsParser.wifiInterface(from: try await hardwarePorts())
             if wifiInterface == nil {
-                Log.error("could not find a Wi-Fi port in networksetup -listallhardwareports")
+                noWifiPort = true
+                Log.info("this Mac has no Wi-Fi port: hotspot failover is off, the internet check still runs")
             } else {
                 Log.info("wifi interface \(wifiInterface!)")
             }
@@ -961,14 +981,14 @@ final class NetworkFailover {
         reachability.record(result)
         if reachability.down {
             if !machine.inOutage {
-                Log.info("wifi path satisfied but the internet is unreachable (captive portal or dead DNS): treating as an outage")
-                await process(satisfied: false, source: "internet probe")
+                Log.info("\(pathSource) satisfied but the internet is unreachable (captive portal or dead DNS): treating as an outage")
+                await process(satisfied: false, source: Self.probeSource)
             }
         } else if result == true, machine.inOutage {
             // The path is up and the internet answers: whether the probe or
             // a portal behind a path recovery held the outage open, it ends.
             Log.info("internet reachable again")
-            await process(satisfied: true, source: "internet probe")
+            await process(satisfied: true, source: Self.probeSource)
         }
     }
 
@@ -984,10 +1004,11 @@ final class NetworkFailover {
         return task
     }
 
-    private func process(satisfied: Bool, source: String = "wifi path") async {
+    private func process(satisfied: Bool, source: String? = nil) async {
         guard !Task.isCancelled else { return }
+        let source = source ?? pathSource
         var satisfied = satisfied
-        if satisfied, source == "wifi path", machine.inOutage, let probe, configProvider().internetProbe {
+        if satisfied, source != Self.probeSource, machine.inOutage, let probe, configProvider().internetProbe {
             // A path back up behind a captive portal is not a recovery:
             // confirm before the nudge types `continue` into the agents.
             let epoch = self.epoch
@@ -995,7 +1016,7 @@ final class NetworkFailover {
             guard !Task.isCancelled, self.epoch == epoch else { return }
             reachability.record(result)
             if result == false {
-                Log.info("wifi path satisfied but the internet is unreachable: outage continues")
+                Log.info("\(pathSource) satisfied but the internet is unreachable: outage continues")
                 satisfied = false
             }
         }
@@ -1026,15 +1047,22 @@ final class NetworkFailover {
     }
 
     /// What the notice timer calls; internal so tests can fire it.
-    func fireOutageNotice(source: String = "wifi path") {
+    func fireOutageNotice(source: String? = nil) {
+        let source = source ?? pathSource
         outageNotice = nil
         guard let start = machine.outageStart, !outageAnnounced else { return }
         outageAnnounced = true
         let config = configProvider()
         let sofar = FailoverMachine.humanGap(clock().timeIntervalSince(start))
-        let cause = source == "wifi path" ? "Wi-Fi has had no connection" : "Wi-Fi is connected but the internet does not answer"
+        let cause: String
+        if noWifiPort {
+            cause = source == Self.probeSource ? "The network is connected but the internet does not answer" : "This Mac has had no network connection"
+        } else {
+            cause = source == Self.probeSource ? "Wi-Fi is connected but the internet does not answer" : "Wi-Fi has had no connection"
+        }
         let hotspot = HotspotSSID.normalized(config.hotspotSSID)
-        let plan = hotspot.isEmpty
+        let plan = noWifiPort ? "Awake keeps watching."
+            : hotspot.isEmpty
             ? "No hotspot is configured; Awake keeps watching."
             : "Awake keeps trying to join \(hotspot) (\(machine.joins) attempt\(machine.joins == 1 ? "" : "s") so far)."
         notifier.post(title: "Internet down", body: "\(cause) for \(sofar). \(plan)")
@@ -1069,9 +1097,10 @@ final class NetworkFailover {
             }
             switch o {
             case let .scheduleRetry(after):
-                schedule(after: after)
+                // No Wi-Fi port: nothing to join, so nothing to retry.
+                if !noWifiPort { schedule(after: after) }
             case .joinHotspot:
-                await joinHotspot()
+                if !noWifiPort { await joinHotspot() }
             case let .recovered(start, gap):
                 self.outage += 1
                 cancelTimer()
@@ -1183,7 +1212,7 @@ final class NetworkFailover {
         lastGap = gap
         let line = FailoverMachine.logLine(start: start, end: end, gap: gap)
         appendHandoff(line)
-        Log.info("wifi path satisfied after \(FailoverMachine.humanGap(gap))")
+        Log.info("\(pathSource) satisfied after \(FailoverMachine.humanGap(gap))")
         let config = configProvider()
         // An outage announced on the phone is closed there too, whatever
         // the nudge below reports.

@@ -296,6 +296,14 @@ From your checkout:
 ./scripts/uninstall.sh --purge
 ```
 
+Both remove the `awake` command link in `/usr/local/bin` or `~/.local/bin`
+when it is a link to the command inside an Awake.app bundle (never another
+file, never with sudo). `--purge` also removes the files Awake keeps beside
+its settings (status.json, report.json, lease-state.json, pre-end.json, the
+audit log, the hook script and socket, and each file in `leases/`), each by
+name; state.json holding a brightness that could not be restored and the
+recovery lock file stay.
+
 With Homebrew, `brew uninstall --cask awake` removes the app and unloads the
 recovery agent, and `--zap` also removes the sudoers rule, settings and
 logs. With a release's `uninstall.sh`, downloaded from its release page, run

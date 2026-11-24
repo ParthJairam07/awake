@@ -9,15 +9,23 @@ import Observation
 @Observable
 final class SystemStatus {
     var lidClosed: Bool = false
+    /// False when this Mac's lid state cannot be read (a desktop, a
+    /// virtual machine) and no lid event has said what it is: `lidClosed`
+    /// is then no reading, and nothing may show it as "open".
+    var lidKnown: Bool = true
     /// The lid is closed on a desk with an external display online, so the
     /// lid actions were not run (`LidPolicy.desk`).
     var lidOnDesk: Bool = false
     var batteryPercent: Int?
+    /// False on a Mac with no battery: it is on mains power.
+    var hasBattery: Bool = true
     var isCharging: Bool = false
     /// On AC but losing charge: the charger is too weak for the load.
     var chargerDraining: Bool = false
     var thermalState: ProcessInfo.ThermalState = .nominal
     var wifiSSID: String?
+    /// False on a Mac with no Wi-Fi port: nothing says "Wi-Fi" there.
+    var hasWifi: Bool = true
     /// Length of the last Wi-Fi outage this session, in seconds.
     var lastGap: TimeInterval?
     var frozenCount: Int = 0
@@ -67,7 +75,9 @@ final class AppServices {
     private let processControl: any ProcessSignaling
     private let docker: DockerRule
     private let keychain: any KeychainStoring
-    private let lid = LidObserver()
+    private let lid: LidObserver
+    /// The lid as the hardware reports it: nil when it cannot be read.
+    private let clamshell: @Sendable () -> Bool?
     /// Display connects and disconnects, for the desk-mode decision on a
     /// closed lid (`LidPolicy`).
     private let displays: DisplayObserver
@@ -131,8 +141,11 @@ final class AppServices {
         lidSimulationEnabled: Bool = LidSimulationBuild.isCompiledIn,
         externalDisplay: @escaping DisplayObserver.Reader = { ExternalDisplays.read() },
         locker: any ScreenLocking = LoginFrameworkScreenLock(),
-        freeDisk: @escaping ResourceMonitor.DiskReader = { ResourceMonitor.readFreeDisk() }
+        freeDisk: @escaping ResourceMonitor.DiskReader = { ResourceMonitor.readFreeDisk() },
+        clamshell: @escaping @Sendable () -> Bool? = { LidObserver.readClamshellState() }
     ) {
+        self.clamshell = clamshell
+        self.lid = LidObserver(read: clamshell)
         self.paths = paths
         self.notifier = notifier
         self.audio = audio
@@ -186,6 +199,7 @@ final class AppServices {
         lid.onChange = { [weak self] closed in self?.lidChanged(closed) }
         lid.start()
         status.lidClosed = lid.isClosed
+        status.lidKnown = clamshell() != nil
         status.lidOnDesk = false
         sampleBrightnessIfLidOpen()
         let timer = DispatchSource.makeTimerSource(queue: .main)
@@ -278,9 +292,11 @@ final class AppServices {
             remainingSeconds: session.map { max(0, Int($0.endsAt.timeIntervalSince(now))) },
             lidClosed: status.lidClosed,
             lidOnDesk: status.lidOnDesk,
+            lidKnown: status.lidKnown,
             batteryPercent: status.batteryPercent,
             isCharging: status.isCharging,
-            chargerDraining: status.chargerDraining,
+            chargerDraining: status.chargerDraining && status.hasBattery,
+            hasBattery: status.hasBattery,
             thermalState: PowerMonitor.name(status.thermalState),
             lowPowerSetByUs: manager?.state.lowPowerSetByUs ?? false,
             wifiSSID: status.wifiSSID,
@@ -307,10 +323,12 @@ final class AppServices {
     /// One-shot launch diagnostics. This does not start any observer or retry
     /// timer, so system integrations remain active only during a session.
     func logStartupSnapshot() {
-        if let closed = LidObserver.readClamshellState() {
+        if let closed = clamshell() {
             status.lidClosed = closed
+            status.lidKnown = true
             Log.info("startup lid state \(closed ? "closed" : "open")")
         } else {
+            status.lidKnown = false
             Log.info("startup lid state unavailable")
         }
 
@@ -321,7 +339,7 @@ final class AppServices {
 
         Task { [weak self] in
             guard let self else { return }
-            self.status.wifiSSID = await self.currentSSID()
+            await self.refreshWifi()
         }
     }
 
@@ -332,7 +350,13 @@ final class AppServices {
     func refreshInstant() {
         power.refreshBattery()
         syncPower()
-        if let now = LidObserver.readClamshellState() { status.lidClosed = now }
+        if let now = clamshell() {
+            status.lidClosed = now
+            status.lidKnown = true
+        } else if lastLidEvent == nil {
+            // No reading and no lid event this session: unknown, not open.
+            status.lidKnown = false
+        }
         syncState()
     }
 
@@ -341,7 +365,7 @@ final class AppServices {
     func refreshOnDemand() async {
         refreshInstant()
         Task { [weak self] in await self?.agentTracker?.poll() }
-        status.wifiSSID = await currentSSID()
+        await refreshWifi()
         await refreshBrowsers()
     }
 
@@ -467,6 +491,7 @@ final class AppServices {
     private func lidChanged(_ closed: Bool) {
         lastLidEvent = closed
         status.lidClosed = closed
+        status.lidKnown = true
         guard let actions = lidActions else { return }
         let policy = LidPolicy.decide(closed: closed, externalOnline: displays.externalOnline, config: manager?.config ?? Config())
         status.lidOnDesk = policy == .desk
@@ -584,6 +609,7 @@ final class AppServices {
 
     private func syncPower() {
         status.batteryPercent = power.percent
+        status.hasBattery = power.hasBattery
         status.isCharging = power.isCharging
         status.chargerDraining = power.chargerDraining
         status.thermalState = power.thermalState
@@ -604,10 +630,11 @@ final class AppServices {
         status.throttledBrowsers = browser.throttledBrowsers
     }
 
-    private func currentSSID() async -> String? {
-        if let network { return await network.currentSSID() }
-        let probe = NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { Config() }
-        return await probe.currentSSID()
+    private func refreshWifi() async {
+        if network == nil, !status.hasWifi { return }
+        let source = network ?? NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { Config() }
+        status.wifiSSID = await source.currentSSID()
+        status.hasWifi = !source.noWifiPort
     }
 
     // MARK: Phase 2: agents
@@ -785,7 +812,7 @@ final class AppServices {
     /// The Wi-Fi name for the phone's Machine tab; the menu reads it the
     /// same way when it opens.
     func refreshSSIDForPhone() async {
-        status.wifiSSID = await currentSSID()
+        await refreshWifi()
     }
 }
 

@@ -57,9 +57,9 @@ of build it made.
 | `SPARKLE_PRIVATE_KEY` (plus the public key committed) | `appcast.xml`, so installed copies update themselves | no feed; the app's updater stays off |
 | `HOMEBREW_TAP_TOKEN` | the cask committed to the tap repository | the cask is on the `homebrew` branch only; copy it by hand |
 
-The repository has to be public for any of the install paths to work: the
-curl installer, the cask, the update feed and the release downloads all
-read from it without credentials.
+The repository is public, which every install path needs: the curl
+installer, the cask, the update feed and the release downloads all read
+from it without credentials.
 
 ### Developer ID certificate and notarization
 
@@ -183,11 +183,13 @@ The zip and the disk image carry a GitHub build provenance attestation that
 names the repository, the ref, the commit and the workflow run that
 produced them.
 
-GitHub does not store attestations for a private repository owned by a
-user account. While this repository is one, a nightly is published without
-an attestation and its release notes say so; the workflow attests again on
-its own once the repository is public. A stable release is never published
-without its attestation: there the run fails at the attestation step.
+This repository is public, so stable releases and nightlies are both
+attested. GitHub does not store attestations for a private repository owned
+by a user account; the nightly job asks GitHub which kind this repository
+is on every run, and were it made private again it would publish the
+nightly without an attestation and say so in the release notes. A stable
+release is never published without its attestation: there the run fails at
+the attestation step.
 
 The binary is arm64 only, because the build job runs on an Apple Silicon
 runner and no universal build is made. A release therefore runs on Apple

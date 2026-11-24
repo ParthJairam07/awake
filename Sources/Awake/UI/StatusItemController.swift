@@ -679,14 +679,17 @@ final class StatusItemController: NSObject {
             machine: StatusLines.machine(
                 lidClosed: status.lidClosed,
                 lidOnDesk: status.lidOnDesk,
+                lidKnown: status.lidKnown,
                 watts: status.instantWatts(),
                 wifiSSID: WiFiStatusName.display(
                     ssid: status.wifiSSID,
-                    locationAuthorized: (status as? LiveStatusSource)?.locationPermission.isAuthorized ?? true
+                    locationAuthorized: (status as? LiveStatusSource)?.locationPermission.isAuthorized ?? true,
+                    hasWifi: status.hasWifi
                 ),
                 batteryPercent: status.batteryPercent,
                 isCharging: status.isCharging,
-                chargerDraining: status.chargerDraining
+                chargerDraining: status.chargerDraining,
+                hasBattery: status.hasBattery
             ),
             actions: StatusLines.actions(
                 frozenCount: status.frozenCount,

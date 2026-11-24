@@ -83,6 +83,73 @@ second, was seen fixed on the running app afterwards.
    Nudge and Answer are now refused while the pane's shell is in front of
    the agent.
 
+### Fixed since (November 24, 2026 UTC)
+
+Each fix has a regression test. "Seen fixed on the running app" means the
+ad-hoc build of the branch (`scripts/build-app.sh`, not installed, run with
+a scratch `AWAKE_HOME`, no session started, no sudo) was watched doing the
+right thing on the same kind of virtual machine (`VirtualMac2,1`, no
+battery, no lid sensor, no Wi-Fi port). No session was started in that
+check, so nothing that needs a session was seen. Screenshots and the log
+are in
+[assets/screenshots/open-findings-2026-11-24](assets/screenshots/open-findings-2026-11-24).
+
+1. **Quit with no session posted "Session restored".** Commit `34bb7b8`.
+   A quit that undoes nothing posts nothing and logs "quit: no session and
+   nothing to undo"; a quit that restores something still says so. Seen
+   fixed on the running app: two quits with no session, no "restored" line
+   in awake.log. The absence of the notification was read from the log, not
+   from Notification Center.
+2. **"Internet down, Wi-Fi has had no connection" on a Mac without Wi-Fi.**
+   Commit `43f91e4`, and `561c779` for the menu's machine line. Without a
+   Wi-Fi port the hotspot failover is off and the wording has no "Wi-Fi";
+   the internet check still decides "Internet down" and "Internet back".
+   Seen fixed on the running app for the startup log line ("this Mac has no
+   Wi-Fi port: hotspot failover is off, the internet check still runs") and
+   the menu, which no longer shows a Wi-Fi part. Unit-tested only for the
+   session alerts: no session was started.
+3. **"on battery" on a machine with no battery.** Commit `3d6aba0`. No
+   battery is mains power: the battery floors and the weak-charger rule do
+   not apply. Seen fixed on the running app in the menu ("mains power"),
+   `awake status` ("Power: mains (no battery)"), status.json
+   (`hasBattery: false`) and the startup log. Unit-tested only for the
+   session log line and the phone's Machine tab.
+4. **"Lid: open" where the phone said "unknown".** Commit `5f18415`. Seen
+   fixed on the running app in the menu and `awake status` ("Lid: unknown")
+   and in status.json (`lidKnown: false`). Unit-tested only for the phone's
+   Session and Machine tabs.
+5. **The summary of a session the recovery agent ended ran to the next
+   launch.** Commit `52657c3`. A session Awake did not see end is counted
+   to its deadline, which is when the recovery agent ends it. Unit-tested
+   only. One case is not exact: a leftover session whose deadline is still
+   ahead at the next launch (the recovery agent ended it early for another
+   reason) is counted to that launch, because the agent does not record
+   when it ran.
+6. **The app menu's "Settings…" opened an empty window.** Commit `4f7b35f`.
+   The SwiftUI `Settings` scene is gone; the app menu's item and
+   Command-comma open the window the status item opens. Seen fixed on the
+   running app: both opened the one "Awake Settings" window with its
+   content. Awake has no Dock icon and so no visible menu bar; the app
+   menu's item was pressed through accessibility (System Events).
+7. **`uninstall.sh` left the `awake` command link.** Commit `f09ee65`. It
+   removes `~/.local/bin/awake` or `/usr/local/bin/awake` only when that is
+   a symlink into an `Awake.app` bundle, without sudo, and `--purge` also
+   removes the lease files, lease-state.json, status.json, report.json,
+   audit.log and audit.log.1, hooks.sock, awake-hook.sh and pre-end.json,
+   each by name. Unit-tested only (the script tests run the real script
+   against temporary folders); not run against an installed copy.
+8. **A pause turns an agent started from a shell prompt into a background
+   job.** Commit `0ba992a`. The behavior is unchanged and stays listed
+   below. What changed is that the phone's Pause confirmation, the Settings
+   caption under the priority pause, docs/agents.md and docs/phone.md say
+   it. Refusing Pause for such a pane was not built. Unit-tested only.
+9. **Statements that had become false.** Commit `6a55db8`. The repository
+   is public; README, PLAN, the FAQ and docs/releasing.md no longer say
+   otherwise or call built features planned. The release workflow was not
+   changed: its nightly job already asks GitHub on each run whether the
+   repository can store attestations, and attests when it can. Unit-tested
+   only; the next nightly run has not been watched.
+
 ### Open findings, not fixed
 
 - **A pause turns an agent started from a shell prompt into a background
@@ -93,22 +160,11 @@ second, was seen fixed on the running app afterwards.
   works, and it applies to the priority pause too. Item 5 above only stops
   the phone from typing into the shell. A Stop sent to such a job takes
   effect only when the job is continued. Not tried with a real Claude Code.
-- Quitting with no session posts "Session restored — Awake quit. Sleep is
-  back to normal."
-- With no Wi-Fi port, every session posts "Internet down — Wi-Fi has had no
-  connection for 1m 30s", and the session log says "on battery" on a machine
-  with no battery. The menu and `awake status` say "Lid: open" where the
-  phone's Machine tab says "unknown".
-- After the recovery agent ends a session, the summary at the next launch
-  counts the time up to that launch ("Ran 3m 39s" for a 3-minute session).
-- The app menu's "Settings…" (the SwiftUI `Settings` scene) opens an empty
-  "Awake Settings" window; the real one opens from the status item's menu.
+  The app and the docs now say this (item 8 of the fixed list).
 - A rebuilt ad-hoc source build cannot read the previous build's paired
   phones (Settings says so) and macOS asks for Screen Recording again.
 - The first phone screenshot raises a macOS dialog on the Mac ("bypass the
   system private window picker") that someone at the Mac has to answer.
-- `uninstall.sh` leaves the `~/.local/bin/awake` link that `link-cli.sh`
-  made.
 
 ### Not run here: needs a physical MacBook, or more than this VM has
 

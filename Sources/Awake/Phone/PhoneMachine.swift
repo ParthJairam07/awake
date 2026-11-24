@@ -14,18 +14,26 @@ final class LivePhoneMachine: PhoneMachineProbing {
         self.interfaces = interfaces
     }
 
+    /// The battery part of the Machine tab. A Mac with no battery says so
+    /// (`hasBattery` false) and reports no charging state and no flow:
+    /// it is on mains, not "not charging".
+    static func fill(_ info: inout PhoneMachineInfo, battery: BatteryStatus, charging: Bool, watts: () -> Double?) {
+        info.hasBattery = battery != .none
+        info.batteryPercent = battery.percent
+        guard battery != .none else { return }
+        info.isCharging = charging
+        info.batteryWatts = watts()
+    }
+
     func read() async -> PhoneMachineInfo {
         var info = PhoneMachineInfo()
         info.hostName = Self.computerName()
         let (battery, charging) = PowerMonitor.readBattery()
-        info.batteryPercent = battery.percent
-        if battery != .none {
-            info.isCharging = charging
-            info.batteryWatts = PowerMonitor.readInstantWatts()
-        }
+        Self.fill(&info, battery: battery, charging: charging, watts: { PowerMonitor.readInstantWatts() })
         info.adapterWatts = Self.adapterWatts()
-        // The trend is only followed while a session runs.
-        if let services, services.running { info.chargerDraining = services.status.chargerDraining }
+        // The trend is only followed while a session runs, and only a
+        // battery can be drained.
+        if let services, services.running, battery != .none { info.chargerDraining = services.status.chargerDraining }
         info.thermalState = PowerMonitor.name(ProcessInfo.processInfo.thermalState)
         let thermal = await ThermalProbe.read()
         info.cpuSpeedLimit = thermal.speedLimit

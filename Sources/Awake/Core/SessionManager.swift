@@ -1326,6 +1326,7 @@ final class SessionManager {
             return
         }
         session = updated
+        noteReport { $0.plannedEnd = updated.endsAt }
         lastError = nil
         Log.info("session extended by \(Int(extra))s until \(iso(updated.endsAt))")
         await armDeadline(updated.endsAt)
@@ -1380,6 +1381,7 @@ final class SessionManager {
             return nil
         }
         session = updated
+        noteReport { $0.plannedEnd = updated.endsAt }
         Log.info("session end moved by leases from \(iso(current.endsAt)) to \(iso(end))")
         await armDeadline(end)
         return end
@@ -1437,7 +1439,13 @@ final class SessionManager {
 
     private func performEnd(reason: EndReason) async -> EndOutcome {
         let had = session != nil
-        Log.info("session end (\(reason.rawValue))")
+        // An end with no session, nothing journaled and no earlier end
+        // still owed undoes nothing: it runs the same steps, which change
+        // nothing, and says nothing afterwards (a quit of an idle app
+        // used to post "Session restored").
+        let nothingToUndo = !had && keptSessionFile == nil && pendingEnd == nil && report == nil
+            && effectiveState.undoEntries == RuntimeState.clean.undoEntries && owedEdits.isEmpty
+        Log.info(nothingToUndo ? "\(reason.rawValue): no session and nothing to undo" : "session end (\(reason.rawValue))")
         stopTimers()
         countdownPaused = false
         let ended = session
@@ -1572,6 +1580,9 @@ final class SessionManager {
             if !agentCanFinish { scheduleEndRetry(reason) }
             return .incomplete(agentArmed: agentCanFinish)
         }
+        if nothingToUndo, Self.endTitle(reason, had: false) == Self.restoredTitle {
+            return .restored
+        }
         notifier.post(title: Self.endTitle(reason, had: had), body: endBody(reason, waiting: waiting))
         postSummary(reason: reason, restored: true)
         return .restored
@@ -1636,6 +1647,13 @@ final class SessionManager {
         }
         guard session == nil else { return }
         var r = left
+        // This process did not see the session end, so the launch time is
+        // not its end. Only a passed deadline ends a session without the
+        // app (the recovery agent acts on it within its one-minute poll),
+        // so the session ran until its deadline. A leftover whose deadline
+        // is still ahead was ended early by a forced recovery run, whose
+        // time is not recorded: the launch time is the closest known.
+        if r.endedAt == nil { r.endedAt = max(r.startedAt, min(clock(), r.plannedEnd)) }
         r.summaryPosted = true
         if config.sessionSummary {
             notifier.post(title: SessionReport.title, body: r.summary(now: clock(), endReasonText: Self.reasonText))
@@ -3331,6 +3349,7 @@ final class SessionManager {
         ISO8601DateFormatter().string(from: d)
     }
 
+    static let restoredTitle = "Session restored"
     static let incompleteTitle = "Restore incomplete"
     static let notEndedTitle = "Session not ended"
     static let journalTitle = "Recovery journal unreadable"
@@ -3344,7 +3363,7 @@ final class SessionManager {
         switch reason {
         case .backstop: "Sleep restored"
         case .startFailed: "Session not started"
-        default: had ? "Session ended" : "Session restored"
+        default: had ? "Session ended" : restoredTitle
         }
     }
 

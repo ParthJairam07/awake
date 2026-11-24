@@ -1207,6 +1207,170 @@ final class RecoveryScriptTests: XCTestCase {
 
     /// --purge removes the moved-aside copies, but only names of exactly the
     /// shape Awake produces. Anything else under the prefix stays.
+    // MARK: the awake command link and the files beside the journal
+
+    private func symlink(_ link: URL, to target: String) throws {
+        try FileManager.default.createDirectory(at: link.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(atPath: link.path, withDestinationPath: target)
+    }
+
+    private func isSymlink(_ url: URL) -> Bool {
+        (try? FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) == .typeSymbolicLink
+    }
+
+    /// The link link-cli.sh or the Settings button made goes with the app,
+    /// in either directory, with or without --purge, and without sudo.
+    func testUninstallRemovesTheAwakeCommandLinkIntoTheBundle() throws {
+        for purge in [false, true] {
+            let f = try ScriptFixture()
+            defer { f.destroy() }
+            try f.installMachinery()
+            let target = f.app.appendingPathComponent("Contents/Helpers/awake").path
+            let system = f.cliSystemBin.appendingPathComponent("awake")
+            let user = f.cliUserBin.appendingPathComponent("awake")
+            try symlink(system, to: target)
+            // Dangling, as it is once the bundle is gone, and to a bundle
+            // somewhere else.
+            try symlink(user, to: "/Volumes/Old Disk/Awake.app/Contents/Helpers/awake")
+
+            let r = try f.run(f.uninstall, purge ? ["--purge"] : [])
+
+            XCTAssertEqual(r.status, 0, r.stderr + r.stdout)
+            XCTAssertFalse(isSymlink(system), r.stdout)
+            XCTAssertFalse(isSymlink(user), r.stdout)
+            XCTAssertTrue(r.stdout.contains("removed \(system.path)"), r.stdout)
+            XCTAssertTrue(f.exists(f.cliSystemBin), "the directory is not Awake's")
+            let sudoCalls = f.calls().filter { $0.hasPrefix("sudo") && $0.contains("awake") && !$0.contains("sudoers") }
+            XCTAssertEqual(sudoCalls, [], "the link is never removed with sudo")
+        }
+    }
+
+    /// Anything else named awake stays: a file, a directory, a link to
+    /// another program, and a link whose target only looks similar.
+    func testUninstallLeavesAnAwakeThatIsNotALinkIntoTheBundle() throws {
+        try fx.installMachinery()
+        let fm = FileManager.default
+        let file = fx.cliSystemBin.appendingPathComponent("awake")
+        try fm.createDirectory(at: fx.cliSystemBin, withIntermediateDirectories: true)
+        try "#!/bin/sh\necho mine\n".write(to: file, atomically: true, encoding: .utf8)
+        let other = fx.cliUserBin.appendingPathComponent("awake")
+        let victim = fx.root.appendingPathComponent("someone-elses-awake")
+        try "theirs".write(to: victim, atomically: true, encoding: .utf8)
+        try symlink(other, to: victim.path)
+
+        let r = try fx.run(fx.uninstall, ["--purge"])
+
+        XCTAssertEqual(r.status, 0, r.stderr + r.stdout)
+        XCTAssertEqual(try String(contentsOf: file, encoding: .utf8), "#!/bin/sh\necho mine\n")
+        XCTAssertTrue(isSymlink(other))
+        XCTAssertEqual(try String(contentsOf: victim, encoding: .utf8), "theirs")
+        XCTAssertTrue(r.stdout.contains("Left \(file.path): it is not a link"), r.stdout)
+        XCTAssertTrue(r.stdout.contains("Left \(other.path): it links to \(victim.path)"), r.stdout)
+    }
+
+    func testUninstallLeavesLinksWhoseTargetOnlyResemblesTheBundle() throws {
+        for target in ["/Applications/NotAwake.app/Contents/Helpers/awake", "/x/Awake.app/Contents/Helpers/awake2", "/x/Awake.app/Contents/MacOS/Awake", "/x/Awake.app.bak/Contents/Helpers/awake", "awake"] {
+            let f = try ScriptFixture()
+            defer { f.destroy() }
+            try f.installMachinery()
+            let link = f.cliUserBin.appendingPathComponent("awake")
+            try symlink(link, to: target)
+            let r = try f.run(f.uninstall)
+            XCTAssertEqual(r.status, 0, r.stderr + r.stdout)
+            XCTAssertTrue(isSymlink(link), "removed a link to \(target)")
+        }
+    }
+
+    /// A dirty journal stops the uninstall before anything is removed, the
+    /// link included.
+    func testUninstallKeepsTheLinkWhenItStopsBeforeRemoving() throws {
+        try fx.installMachinery()
+        try fx.writeState(#"{"sleepDisabledByUs":false,"lowPowerSetByUs":false,"frozenProcesses":[],"dockerFrozen":false,"savedOutputVolume":0.25,"savedMuted":true}"#)
+        let link = fx.cliUserBin.appendingPathComponent("awake")
+        try symlink(link, to: fx.app.appendingPathComponent("Contents/Helpers/awake").path)
+        let r = try fx.run(fx.uninstall, ["--purge"])
+        XCTAssertNotEqual(r.status, 0)
+        XCTAssertTrue(isSymlink(link))
+    }
+
+    /// --purge removes each file the app writes beside the journal, by
+    /// name, and nothing else in the directory; the lock file stays.
+    func testUninstallPurgeRemovesTheFilesBesideTheJournal() throws {
+        try fx.installMachinery()
+        let fm = FileManager.default
+        let owned = ["status.json", "report.json", "lease-state.json", "pre-end.json", "audit.log", "audit.log.1", "awake-hook.sh"]
+        for name in owned { try "x".write(to: fx.home.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        let leases = fx.home.appendingPathComponent("leases", isDirectory: true)
+        try fm.createDirectory(at: leases, withIntermediateDirectories: true)
+        for name in ["a1.json", "b2.json"] { try "{}".write(to: leases.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        // A socket, as the app leaves it. The path must fit sockaddr_un.
+        let sock = fx.home.appendingPathComponent("hooks.sock")
+        // Bound by relative name: the full path can be longer than
+        // sockaddr_un allows.
+        let bind = Process()
+        bind.executableURL = URL(fileURLWithPath: "/usr/bin/python3")
+        bind.arguments = ["-c", "import socket; socket.socket(socket.AF_UNIX).bind('hooks.sock')"]
+        bind.currentDirectoryURL = fx.home
+        try bind.run()
+        bind.waitUntilExit()
+        XCTAssertEqual(bind.terminationStatus, 0)
+        XCTAssertEqual(try fm.attributesOfItem(atPath: sock.path)[.type] as? FileAttributeType, .typeSocket)
+        let notOurs = ["notes.txt", "audit.log.backup", "status.json.mine"]
+        for name in notOurs { try "keep".write(to: fx.home.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+
+        let r = try fx.run(fx.uninstall, ["--purge"])
+
+        XCTAssertEqual(r.status, 0, r.stderr + r.stdout)
+        for name in owned { XCTAssertFalse(fx.exists(fx.home.appendingPathComponent(name)), "\(name) left behind") }
+        XCTAssertFalse(fx.exists(sock), "hooks.sock left behind")
+        XCTAssertFalse(fx.exists(leases), "the empty leases directory left behind")
+        for name in notOurs { XCTAssertTrue(fx.exists(fx.home.appendingPathComponent(name)), "\(name) is not Awake's") }
+        XCTAssertTrue(fx.exists(fx.lock), "the lock file is never unlinked")
+    }
+
+    /// Without --purge those files stay, as config.json and the logs do.
+    func testUninstallWithoutPurgeKeepsTheFilesBesideTheJournal() throws {
+        try fx.installMachinery()
+        let leases = fx.home.appendingPathComponent("leases", isDirectory: true)
+        try FileManager.default.createDirectory(at: leases, withIntermediateDirectories: true)
+        let kept = ["status.json", "report.json", "lease-state.json", "pre-end.json", "audit.log", "awake-hook.sh", "leases/a1.json"]
+        for name in kept { try "x".write(to: fx.home.appendingPathComponent(name), atomically: true, encoding: .utf8) }
+        let r = try fx.run(fx.uninstall)
+        XCTAssertEqual(r.status, 0, r.stderr + r.stdout)
+        for name in kept { XCTAssertTrue(fx.exists(fx.home.appendingPathComponent(name)), "\(name) removed without --purge") }
+    }
+
+    /// Deletion is by file, never by tree: what is in leases/ and is not a
+    /// lease file stays, with the directory; a directory or a link named
+    /// like one of the files is left and named.
+    func testUninstallPurgeNeverRemovesATreeOrFollowsALink() throws {
+        try fx.installMachinery()
+        let fm = FileManager.default
+        let leases = fx.home.appendingPathComponent("leases", isDirectory: true)
+        try fm.createDirectory(at: leases.appendingPathComponent("sub.json", isDirectory: true), withIntermediateDirectories: true)
+        try "keep".write(to: leases.appendingPathComponent("sub.json/inner"), atomically: true, encoding: .utf8)
+        try "keep".write(to: leases.appendingPathComponent("README"), atomically: true, encoding: .utf8)
+        try "{}".write(to: leases.appendingPathComponent("a1.json"), atomically: true, encoding: .utf8)
+        let victim = fx.root.appendingPathComponent("victim.txt")
+        try "theirs".write(to: victim, atomically: true, encoding: .utf8)
+        try fm.createSymbolicLink(atPath: fx.home.appendingPathComponent("status.json").path, withDestinationPath: victim.path)
+        try fm.createSymbolicLink(atPath: leases.appendingPathComponent("link.json").path, withDestinationPath: victim.path)
+        try fm.createDirectory(at: fx.home.appendingPathComponent("audit.log"), withIntermediateDirectories: true)
+        try "x".write(to: fx.home.appendingPathComponent("hooks.sock"), atomically: true, encoding: .utf8)
+
+        let r = try fx.run(fx.uninstall, ["--purge"])
+
+        XCTAssertEqual(r.status, 0, r.stderr + r.stdout)
+        XCTAssertFalse(fx.exists(leases.appendingPathComponent("a1.json")))
+        XCTAssertTrue(fx.exists(leases.appendingPathComponent("sub.json/inner")))
+        XCTAssertTrue(fx.exists(leases.appendingPathComponent("README")))
+        XCTAssertEqual(try String(contentsOf: victim, encoding: .utf8), "theirs")
+        XCTAssertTrue(fx.exists(fx.home.appendingPathComponent("audit.log")))
+        XCTAssertTrue(fx.exists(fx.home.appendingPathComponent("hooks.sock")), "a regular file is not the app's socket")
+        XCTAssertTrue(r.stdout.contains("Kept \(leases.path)"), r.stdout)
+        XCTAssertTrue(r.stdout.contains("it is not a socket"), r.stdout)
+    }
+
     func testUninstallPurgeRemovesOnlyMovedAsideSessionFilesOfAwakesShape() throws {
         try fx.installMachinery()
         let ours = ["session.json.unreadable-20260101T000000Z", "session.json.unreadable-20260101T000000Z-3"]
@@ -6574,6 +6738,10 @@ private final class ScriptFixture {
 
     var backstop: URL { repoScripts.appendingPathComponent("backstop.sh") }
     var uninstall: URL { repoScripts.appendingPathComponent("uninstall.sh") }
+    /// Stand-ins for /usr/local/bin and ~/.local/bin, where the `awake`
+    /// command link goes.
+    var cliSystemBin: URL { root.appendingPathComponent("usr-local-bin", isDirectory: true) }
+    var cliUserBin: URL { root.appendingPathComponent("dot-local-bin", isDirectory: true) }
     var install: URL { repoScripts.appendingPathComponent("install.sh") }
     var installRedirected: URL { repoScripts.appendingPathComponent("install.redirected.sh") }
     /// installRedirected with a 1 s limit for each bounded call.
@@ -6797,6 +6965,8 @@ private final class ScriptFixture {
             "KILL": bin.appendingPathComponent("kill").path,
             "APP": app.path,
             "SUDOERS": sudoers.path,
+            "CLI_SYSTEM_BIN": cliSystemBin.path,
+            "CLI_USER_BIN": cliUserBin.path,
             "LOCK_TIMEOUT_SECONDS": "1",
             "QUIT_WAIT_SECONDS": "1",
             "CALL_TIMEOUT_SECONDS": "5",

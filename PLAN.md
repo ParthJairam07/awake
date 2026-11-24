@@ -76,7 +76,7 @@ Still to do for phase 2: the real-Mac check (real Claude Code and Codex sessions
 - **Server**: `PhoneServer` (`Sources/Awake/Phone/`), HTTP/1.1 on `NWListener`, bound only to the Mac's Tailscale addresses (a `utun` interface with a `100.64.0.0/10` address, plus the tailnet IPv6 address) and `127.0.0.1`, on `phonePort` (7788), when `phoneApp` is on (off by default). Never all interfaces. Without Tailscale it serves loopback only and Settings and the menu say "Tailscale not found". Plain HTTP on the tailnet; `tailscale serve --bg 7788` gives https, and Settings shows that address and its QR code when it finds it.
 - **Pairing and auth**: a six-digit code (5 minutes, 5 tries, then a new one) shown with a QR code in Settings and in the menu; a 32-byte bearer token per phone, stored on the Mac only as a salted SHA-256 in the login keychain; Forget per phone and Forget all. 30 requests / 10 s per phone, 5 failed sign-ins a minute per address then a 5-minute block. Every action goes to an owner-only `audit.log`, rotated at 5 MB.
 - **API**, allow-listed, everything else 404: status and a server-sent event stream of it, session start / extend / end, lock, panic (lock, then end the session, which resumes what Awake froze), screenshot (ScreenCaptureKit, in memory, 403 without Screen Recording), log tail, machine readings, agent actions through `AgentActing`.
-- **PWA**, no framework and no build step, embedded in the app: Session, Agents, Machine, Security, Log. Agents and leases are rendered when the status carries them; until phase 2 is wired in, `AgentActing` is a stand-in that answers "not available yet".
+- **PWA**, no framework and no build step, embedded in the app: Session, Agents, Machine, Security, Log. Agents and leases are rendered from the status, and the agent actions go through `AgentActions` (phase 2); `UnavailableAgentActions` answers "not available yet" while no session is tracking agents.
 - **Not done**: web push from the PWA (ntfy and Pushover stay the push path), data used, "commit and push a repo", and the screen-sharing tiers of section 8 past the still screenshot.
 - Native iOS app later, only if the PWA is not enough (push reliability is the deciding factor).
 
@@ -89,7 +89,7 @@ Still to do for phase 2: the real-Mac check (real Claude Code and Codex sessions
 - **`awake` command** (`lease`, `release`, `leases`, `status`, `extend`, `mcp`), shipped at `Awake.app/Contents/Helpers/awake` and linked onto the PATH by Settings or `scripts/link-cli.sh`. **MCP server** (`awake mcp`, stdio, protocol 2025-06-18) with `awake_lease`, `awake_release`, `awake_leases`, `awake_status`, `awake_extend`.
 - Leases show in the menu, in `status.json` and in the session summary; "Lease granted" and "Last lease released" go to the Mac and the phone. Settings > Leases has the toggles.
 
-Still to do: schedules and profiles (end at a clock time, recurring nights, Overnight / Commute / Clamshell desk / Demo); leases on the phone screens arrive with phase 3; a real-Mac check of a lease-held overnight session recorded in `docs/release-validation.md`.
+Still to do: schedules and profiles (end at a clock time, recurring nights, Overnight / Commute / Clamshell desk / Demo); a real-Mac check of a lease-held overnight session recorded in `docs/release-validation.md`.
 
 ## 4. Decisions already made
 
@@ -161,7 +161,7 @@ The App Store sandbox forbids what Awake needs: `sudo pmset`, SIGSTOP on other a
 - **Setup window** on first launch (and "Setup…" in the menu): what Awake does and how it can fail, notifications, the sudoers rule (Copy / Run in Terminal, never a silent sudo), Accessibility and Screen Recording, ntfy with a test, Tailscale, launch at login. Every step can be skipped.
 - **CI**: every pull request builds and packages an ad-hoc `0.0.0-ci`.
 
-Still to do by hand, once: the Developer ID certificate and notary secrets, the Sparkle key pair, the tap repository, and making the repository public. `docs/releasing.md` is the checklist. Setapp and the App Store are untouched.
+Still to do by hand, once: the Developer ID certificate and notary secrets, the Sparkle key pair and the tap repository. The repository is public, so the nightly is attested like a stable release. `docs/releasing.md` is the checklist. Setapp and the App Store are untouched.
 
 ### iPhone: PWA first, then TestFlight, then App Store
 

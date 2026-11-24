@@ -21,13 +21,21 @@ final class SettingsWindow {
     /// Bring the window up, creating it the first time. An accessory app has
     /// to activate itself first or the window opens behind whatever is front.
     func show() {
-        let window = window ?? make()
-        self.window = window
+        let window = prepared()
         NSApp.activate(ignoringOtherApps: true)
         if !window.isVisible {
             window.center()
         }
         window.makeKeyAndOrderFront(nil)
+    }
+
+    /// The one settings window, made the first time it is asked for and
+    /// kept: every way of opening settings gets this same window.
+    func prepared() -> NSWindow {
+        if let window { return window }
+        let made = make()
+        window = made
+        return made
     }
 
     private func make() -> NSWindow {
