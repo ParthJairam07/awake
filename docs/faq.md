@@ -112,7 +112,7 @@ it should be long and random. Settings > Phone alerts takes your own ntfy
 server and an access token if you want it private.
 
 **Why Tailscale?**
-The phone app (coming) talks to the Mac directly over Tailscale, a private
+The phone app talks to the Mac directly over Tailscale, a private
 network between your own devices, so nothing is exposed to the internet.
 Alerts through ntfy do not need it.
 

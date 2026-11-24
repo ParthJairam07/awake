@@ -27,7 +27,7 @@ Awake starts from those gaps.
 
 ## What Awake does
 
-The first list is the goal; the items marked *(today)* work now, the rest are planned.
+Everything in these two lists is built and marked *(today)*; what is not built is named as such.
 
 **On the Mac**
 - Keeps the Mac awake for a fixed time, never forever, with a recovery journal so everything is undone even after a crash. *(today)*
@@ -41,8 +41,8 @@ The first list is the goal; the items marked *(today)* work now, the rest are pl
 
 **On the phone**
 - Push alerts for the things that matter: battery or heat, weak charger, internet down and back, session ending in 10 minutes, session ended, something not restored, disk or memory trouble; via ntfy or Pushover, tokens in your keychain. *(today)* Agent waiting, stalled and exited, "All agents finished" and "Dialog blocking" too. *(today)*
-- One screen per agent, one tap to answer a prompt, nudge, pause, or stop it.
-- A web app served by the Mac over Tailscale to paired phones: time left, extend, end or start a session, lock the screen, take a screenshot, read the machine and the log, Panic. *(today; [docs/phone.md](docs/phone.md))* Agent cards fill in with the agent layer; commit and push a repo is still to come.
+- One card per agent, one tap to answer a prompt, nudge, pause, resume or stop it, each confirmed. *(today, in the web app below; see [docs/agents.md](docs/agents.md#from-the-phone) for what a pause does to an agent started from a shell prompt)*
+- A web app served by the Mac over Tailscale to paired phones: time left, extend, end or start a session, lock the screen, take a screenshot, read the machine and the log, Panic. *(today; [docs/phone.md](docs/phone.md))* Not built: commit and push a repo from the phone, and web push from the web app (alerts go through ntfy or Pushover).
 - A summary when the session ends: how long it ran, why it ended, battery used, lid closes, Low Power Mode and heat events, outages, whether everything was restored. *(today)* It also lists the agents that ran, finished, stalled or were waiting at the end, and repos with unpushed commits. *(today)*
 - `status.json` and a local `http://127.0.0.1:<port>/status.json` for Raycast or SketchyBar, with an `agents` array. *(today)*
 
