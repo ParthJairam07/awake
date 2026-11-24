@@ -68,6 +68,9 @@ known only from hooks has no process and no pane, so it can only be
 watched; an agent with `sudo` under it is not paused. Nothing here runs
 `sudo`. See [agents.md](agents.md#from-the-phone).
 
+An agent started from a shell prompt becomes a background job of that shell when it is paused: the shell takes the terminal back, and after the resume an agent that reads the terminal stays stopped until you type `fg` in that terminal.
+The Pause confirmation on the phone says the same.
+
 The page stays live over one long-lived connection (server-sent events)
 and reconnects with a growing delay; while it cannot reach the Mac it
 says so in a banner and its buttons report the failure instead of

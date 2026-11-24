@@ -189,6 +189,10 @@ agent at Normal nothing is paused; mark the ones that can wait as Low.
 When the pressure clears they are resumed (SIGCONT) in the order they
 were paused, and "Agents paused" / "Agents resumed" say which.
 
+An agent started from a shell prompt becomes a background job of that shell when it is paused: the shell takes the terminal back, and after the resume an agent that reads the terminal stays stopped until you type `fg` in that terminal.
+Settings says so under the toggle, and the note under
+[From the phone](#from-the-phone) has the detail.
+
 The stops use the same machinery as freezing apps on lid close: each one
 is journaled before the signal, tied to the process's start time, and
 undone by the session end, the recovery agent or the next launch if Awake
@@ -223,6 +227,8 @@ the group in front of the pane, or the shell's only job when the shell
 itself is in front. The phone API records
 every action in the audit log, with the length of an answer, never its
 text.
+
+An agent started from a shell prompt becomes a background job of that shell when it is paused: the shell takes the terminal back, and after the resume an agent that reads the terminal stays stopped until you type `fg` in that terminal.
 
 A pause is a SIGSTOP, and an interactive shell notices when a program it
 started is stopped: it prints "suspended", takes the terminal back, and

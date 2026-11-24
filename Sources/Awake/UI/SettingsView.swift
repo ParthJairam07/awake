@@ -655,7 +655,7 @@ struct SettingsView: View {
                     }
                 }
             }
-            Text("Below the Low Power Mode floor, when the Mac is hot, or under critical memory pressure, agents are paused lowest priority first, one priority a minute, and never the highest priority running; they resume when it clears. With every agent at the same priority nothing is paused. An agent at a sudo prompt is never paused.")
+            Text("Below the Low Power Mode floor, when the Mac is hot, or under critical memory pressure, agents are paused lowest priority first, one priority a minute, and never the highest priority running; they resume when it clears. With every agent at the same priority nothing is paused. An agent at a sudo prompt is never paused. \(AgentPauseCopy.shellJob)")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } header: {

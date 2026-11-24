@@ -134,6 +134,14 @@
 
   // The Session tab's power line as [label, text, tone], or null for no
   // line. A Mac with no battery is on mains: never "on battery".
+  // What the Pause button asks. The second sentence is the one in
+  // AgentPauseCopy.shellJob, Settings and the docs: a pause is a SIGSTOP,
+  // and a shell that started the agent takes the terminal back.
+  var PAUSE_SHELL_JOB = 'An agent started from a shell prompt becomes a background job of that shell when it is paused: the shell takes the terminal back, and after the resume an agent that reads the terminal stays stopped until you type fg in that terminal.';
+  function pauseConfirmation(name) {
+    return { title: 'Pause ' + name + '?', body: 'The agent is frozen until you resume it. ' + PAUSE_SHELL_JOB, ok: 'Pause' };
+  }
+
   function sessionPowerFact(status) {
     if (status.hasBattery === false) return ['Power', 'mains (no battery)', null];
     // No reading (a failed read): the Machine tab says so.
@@ -167,7 +175,7 @@
     module.exports = {
       formatRemaining: formatRemaining, formatMinutes: formatMinutes, formatAge: formatAge, formatBytes: formatBytes,
       ringFraction: ringFraction, stateLabel: stateLabel, backoffSeconds: backoffSeconds, EventParser: EventParser,
-      lidText: lidText, sessionPowerFact: sessionPowerFact, machinePowerFacts: machinePowerFacts,
+      lidText: lidText, pauseConfirmation: pauseConfirmation, sessionPowerFact: sessionPowerFact, machinePowerFacts: machinePowerFacts,
       guessDeviceName: guessDeviceName, pairingCodeFromHash: pairingCodeFromHash, base64UrlToBytes: base64UrlToBytes
     };
     return;
@@ -640,7 +648,7 @@
         // Nothing to pause or stop.
       } else {
         button('Pause', null, function () {
-          ask({ title: 'Pause ' + name + '?', body: 'The agent is frozen until you resume it.', ok: 'Pause' }).then(function (yes) {
+          ask(pauseConfirmation(name)).then(function (yes) {
             if (yes) act('agent', 'POST', base + 'pause');
           });
         });
