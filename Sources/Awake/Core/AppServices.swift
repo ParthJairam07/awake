@@ -24,6 +24,8 @@ final class SystemStatus {
     var chargerDraining: Bool = false
     var thermalState: ProcessInfo.ThermalState = .nominal
     var wifiSSID: String?
+    /// False on a Mac with no Wi-Fi port: nothing says "Wi-Fi" there.
+    var hasWifi: Bool = true
     /// Length of the last Wi-Fi outage this session, in seconds.
     var lastGap: TimeInterval?
     var frozenCount: Int = 0
@@ -337,7 +339,7 @@ final class AppServices {
 
         Task { [weak self] in
             guard let self else { return }
-            self.status.wifiSSID = await self.currentSSID()
+            await self.refreshWifi()
         }
     }
 
@@ -363,7 +365,7 @@ final class AppServices {
     func refreshOnDemand() async {
         refreshInstant()
         Task { [weak self] in await self?.agentTracker?.poll() }
-        status.wifiSSID = await currentSSID()
+        await refreshWifi()
         await refreshBrowsers()
     }
 
@@ -628,10 +630,11 @@ final class AppServices {
         status.throttledBrowsers = browser.throttledBrowsers
     }
 
-    private func currentSSID() async -> String? {
-        if let network { return await network.currentSSID() }
-        let probe = NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { Config() }
-        return await probe.currentSSID()
+    private func refreshWifi() async {
+        if network == nil, !status.hasWifi { return }
+        let source = network ?? NetworkFailover(paths: paths, keychain: keychain, notifier: notifier) { Config() }
+        status.wifiSSID = await source.currentSSID()
+        status.hasWifi = !source.noWifiPort
     }
 
     // MARK: Phase 2: agents
@@ -809,7 +812,7 @@ final class AppServices {
     /// The Wi-Fi name for the phone's Machine tab; the menu reads it the
     /// same way when it opens.
     func refreshSSIDForPhone() async {
-        status.wifiSSID = await currentSSID()
+        await refreshWifi()
     }
 }
 

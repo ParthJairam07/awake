@@ -683,7 +683,8 @@ final class StatusItemController: NSObject {
                 watts: status.instantWatts(),
                 wifiSSID: WiFiStatusName.display(
                     ssid: status.wifiSSID,
-                    locationAuthorized: (status as? LiveStatusSource)?.locationPermission.isAuthorized ?? true
+                    locationAuthorized: (status as? LiveStatusSource)?.locationPermission.isAuthorized ?? true,
+                    hasWifi: status.hasWifi
                 ),
                 batteryPercent: status.batteryPercent,
                 isCharging: status.isCharging,

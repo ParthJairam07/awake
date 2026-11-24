@@ -127,4 +127,13 @@ final class NoWifiPortTests: XCTestCase {
         XCTAssertEqual(notifier.posts.last?.body, "Wi-Fi has had no connection for 1m 30s. Awake keeps trying to join Phone (1 attempt so far).")
         n.stop()
     }
+
+    /// The menu's machine line: macOS hides a Wi-Fi name until Location is
+    /// allowed, which read "Wi-Fi: on (name hidden…)" on a Mac with no Wi-Fi.
+    func testTheMenuNamesNoWifiOnAMacWithoutAWifiPort() {
+        XCTAssertNil(WiFiStatusName.display(ssid: nil, locationAuthorized: false, hasWifi: false))
+        XCTAssertEqual(WiFiStatusName.display(ssid: nil, locationAuthorized: false, hasWifi: true), "on (name hidden until Location is allowed)")
+        let line = StatusLines.machine(lidClosed: false, watts: nil, wifiSSID: WiFiStatusName.display(ssid: nil, locationAuthorized: false, hasWifi: false), batteryPercent: nil, isCharging: false, hasBattery: false)
+        XCTAssertFalse(line.contains("Wi-Fi"), line)
+    }
 }

@@ -18,6 +18,8 @@ protocol StatusSource: AnyObject, Observable {
     /// On AC but losing charge (`ChargerTrend`).
     var chargerDraining: Bool { get }
     var wifiSSID: String? { get }
+    /// False on a Mac with no Wi-Fi port.
+    var hasWifi: Bool { get }
     /// Length of the most recent network outage, nil if none this session.
     var lastGap: TimeInterval? { get }
     var frozenCount: Int { get }
@@ -45,6 +47,7 @@ protocol StatusSource: AnyObject, Observable {
 extension StatusSource {
     /// A source that does not say has a battery, as before the key.
     var hasBattery: Bool { true }
+    var hasWifi: Bool { true }
     /// A source that does not say has a lid it can read, as before the key.
     var lidKnown: Bool { true }
 }
@@ -164,7 +167,8 @@ enum SleepHeldLine {
 /// macOS hides Wi-Fi network names until Location is allowed; say so rather
 /// than reporting no network at all.
 enum WiFiStatusName {
-    static func display(ssid: String?, locationAuthorized: Bool) -> String? {
+    static func display(ssid: String?, locationAuthorized: Bool, hasWifi: Bool = true) -> String? {
+        guard hasWifi else { return nil }
         if let ssid, !ssid.isEmpty { return ssid }
         return locationAuthorized ? nil : "on (name hidden until Location is allowed)"
     }

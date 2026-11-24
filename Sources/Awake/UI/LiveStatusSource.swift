@@ -19,6 +19,7 @@ final class LiveStatusSource: StatusSource {
     var isCharging: Bool { services.status.isCharging }
     var chargerDraining: Bool { services.status.chargerDraining }
     var wifiSSID: String? { services.status.wifiSSID }
+    var hasWifi: Bool { services.status.hasWifi }
     var lastGap: TimeInterval? { services.status.lastGap }
     var frozenCount: Int { services.status.frozenCount }
     var dockerPaused: Bool { services.status.dockerPaused }
